@@ -1,0 +1,40 @@
+{
+	"name": "supermemory-local",
+	"version": "1.0.0",
+	"author": "Irfnd <irfandiabimanyu@gmail.com>",
+	"license": "MIT",
+	"description": "Fully-local Supermemory instance connected to 9router with CLI hooks for Claude Code, Antigravity, and OpenCode",
+	"type": "module",
+	"private": true,
+	"bin": {
+		"supermemory-hook": "./bin/supermemory-hook.ts"
+	},
+	"scripts": {
+		"start": "bash scripts/start.sh",
+		"stop": "bash scripts/stop.sh",
+		"status": "bash scripts/status.sh",
+		"install-hooks": "bun src/installer.ts install",
+		"uninstall-hooks": "bun src/installer.ts uninstall",
+		"test-memory": "bun src/test-memory.ts",
+		"test": "bun test",
+		"typecheck": "tsc --noEmit",
+		"format": "bun --bun prettier --write .",
+		"format:check": "bun --bun prettier --check ."
+	},
+	"keywords": [
+		"supermemory",
+		"9router",
+		"memory",
+		"claude-code",
+		"antigravity",
+		"opencode",
+		"local-ai"
+	],
+	"devDependencies": {
+		"@irfnd/prettier-config": "^1.5.4",
+		"@opencode-ai/plugin": "^1.18.33",
+		"@types/bun": "^1.4.2",
+		"prettier": "^3.9.9",
+		"typescript": "^7.0.2"
+	}
+}
