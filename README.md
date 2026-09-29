@@ -49,10 +49,12 @@ supermemory-local/
 │   └── supermemory-hook.ts  # Entrypoint hook CLI serbaguna untuk semua agent
 ├── data/                    # Storage graph, SQLite database, & cache model ONNX
 │   ├── models/              # Model weights lokal Xenova (ONNX)
-│   └── supermemory.log      # Log runtime server
+│   ├── supermemory.log      # Log runtime server
+│   ├── llm-proxy.log        # Log proxy LLM (status & durasi per request)
+│   └── zed-adapter.log      # Log adapter Zed
 ├── scripts/
 │   ├── start.sh             # Menjalankan 9router + llm-proxy + zed-adapter + supermemory-server
-│   ├── stop.sh              # Menghentikan supermemory-server + llm-proxy + zed-adapter
+│   ├── stop.sh              # Menghentikan supermemory-server + llm-proxy + zed-adapter (--all: juga 9router)
 │   └── status.sh            # Cek status kesehatan, port, dan model 9router
 └── src/
     ├── hook-handler.ts      # Handler lifecycle (start, change, stop)
@@ -90,8 +92,20 @@ OPENAI_BASE_URL=http://127.0.0.1:20128/v1
 OPENAI_API_KEY=<your-9router-api-key>
 OPENAI_MODEL=ag/gemini-3.8-flash-low
 
-# Supermemory API URL
+# Supermemory Client API (dipakai hooks)
 SUPERMEMORY_API_URL=http://127.0.0.1:6767
+SUPERMEMORY_API_KEY=sm_local_key   # placeholder: client memakai data/api-key buatan server
+
+# 9router
+NINEROUTER_PORT=20128
+NINEROUTER_HOST=127.0.0.1
+
+# Proxy LLM supermemory → 9router (memaksa "stream": false)
+LLM_PROXY_PORT=20129
+
+# Adapter Zed edit prediction (pakai OPENAI_BASE_URL + OPENAI_API_KEY di atas)
+ZED_ADAPTER_PORT=20130
+ZED_ADAPTER_REASONING_EFFORT=none
 ```
 
 > **Catatan Model:** `ag/gemini-3.8-flash-low` sudah teruji bisa mengekstrak memori (tool calling & JSON) selama server berjalan lewat `llm-proxy` (otomatis dari `bun run start`). Tanpa proxy, 9router membalas dalam format streaming dan semua dokumen berakhir `failed` dengan error "Invalid JSON response".
@@ -103,9 +117,9 @@ SUPERMEMORY_API_URL=http://127.0.0.1:6767
 Butuh [Bun](https://bun.sh) (`curl -fsSL https://bun.sh/install | bash`). Pasang devDependencies sekali (`bun install`), lalu gunakan script bun atau bash langsung:
 
 ```bash
-# Jalankan 9router & Supermemory Server di background:
+# Jalankan 9router (jika belum), llm-proxy, zed-adapter & Supermemory Server di background:
 bun run start
-# atau: ./scripts/start.sh
+# atau: ./scripts/start.sh (tambahkan --foreground untuk server di foreground)
 ```
 
 Cek status layanan:
@@ -120,6 +134,7 @@ Untuk menghentikan:
 ```bash
 bun run stop
 # atau: ./scripts/stop.sh
+# ./scripts/stop.sh --all  # sekalian menghentikan 9router
 ```
 
 ---
@@ -195,7 +210,9 @@ bun run uninstall-hooks
 
 ## ✏️ Zed Edit Prediction (via `zed-adapter`)
 
-Provider `open_ai_compatible_api` di Zed mengirim format legacy `/v1/completions` (`{"prompt": ...}`), sedangkan 9router hanya punya `/chat/completions`. Tanpa adapter, `prompt` diabaikan, `messages` kosong, dan Gemini menolak dengan `400 contents is not specified`. `bun run start` menjalankan `src/zed-adapter.ts` di port `ZED_ADAPTER_PORT` (default `20130`) memakai `OPENAI_BASE_URL` & `OPENAI_API_KEY` dari `.env`.
+Provider `open_ai_compatible_api` di Zed mengirim format legacy `/v1/completions` (`{"prompt": ...}`), sedangkan 9router hanya punya `/chat/completions`. Tanpa adapter, `prompt` diabaikan, `messages` kosong, dan Gemini menolak dengan `400 contents is not specified`. `bun run start` menjalankan `src/zed-adapter.ts` di port `ZED_ADAPTER_PORT` (default `20130`) memakai `OPENAI_BASE_URL` & `OPENAI_API_KEY` dari `.env` (header Authorization dari Zed hanya dipakai jika key di `.env` kosong).
+
+Adapter mengirim `reasoning_effort` dari `ZED_ADAPTER_REASONING_EFFORT` (default `none`), lalu merapikan output model chat: membuang pembungkus ` ``` `, menerapkan `stop` secara lokal (Gemini membatasi 5 stop sequence), dan menambahkan kembali marker zeta `<|editable_region_start|>`/`<|editable_region_end|>` jika hilang.
 
 ```json
 "edit_predictions": {

@@ -72,7 +72,7 @@ echo -n "→ Checking LLM proxy on port $LLM_PROXY_PORT... "
 if curl -s --connect-timeout 1 "http://127.0.0.1:$LLM_PROXY_PORT/models" >/dev/null 2>&1; then
   echo "✓ Running"
 else
-  LLM_PROXY_TARGET="$LLM_UPSTREAM" LLM_PROXY_PORT="$LLM_PROXY_PORT" \
+  OPENAI_BASE_URL="$LLM_UPSTREAM" LLM_PROXY_PORT="$LLM_PROXY_PORT" \
     nohup bun "$PROJECT_ROOT/src/llm-proxy.ts" >> "$DATA_DIR/llm-proxy.log" 2>&1 &
   echo $! > "$PROXY_PID_FILE"
   for i in {1..20}; do
@@ -87,7 +87,7 @@ echo -n "→ Checking Zed adapter on port $ZED_ADAPTER_PORT... "
 if curl -s --connect-timeout 1 "http://127.0.0.1:$ZED_ADAPTER_PORT/v1/completions" >/dev/null 2>&1; then
   echo "✓ Running"
 else
-  ZED_ADAPTER_TARGET="$LLM_UPSTREAM" ZED_ADAPTER_PORT="$ZED_ADAPTER_PORT" \
+  OPENAI_BASE_URL="$LLM_UPSTREAM" ZED_ADAPTER_PORT="$ZED_ADAPTER_PORT" \
     nohup bun "$PROJECT_ROOT/src/zed-adapter.ts" >> "$DATA_DIR/zed-adapter.log" 2>&1 &
   echo $! > "$ZED_ADAPTER_PID_FILE"
   for i in {1..20}; do

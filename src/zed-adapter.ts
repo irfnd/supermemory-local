@@ -1,7 +1,7 @@
 // Zed edit-prediction adapter: OpenAI legacy /v1/completions -> 9router /chat/completions.
 // Zed's open_ai_compatible_api provider sends {prompt} to /v1/completions; 9router has no such route and
 // ignores `prompt` on /chat/completions (empty `messages` -> Gemini 400 "contents is not specified").
-// Usage: ZED_ADAPTER_PORT=20130 OPENAI_API_KEY=... bun src/zed-adapter.ts
+// Usage: OPENAI_BASE_URL=http://127.0.0.1:20128/v1 ZED_ADAPTER_PORT=20130 OPENAI_API_KEY=... bun src/zed-adapter.ts
 
 const TARGET = process.env.OPENAI_BASE_URL!.replace(/\/$/, '');
 const API_KEY = process.env.OPENAI_API_KEY;

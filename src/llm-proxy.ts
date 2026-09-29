@@ -1,7 +1,7 @@
 // LLM proxy between supermemory-server and 9router.
 // supermemory omits "stream" in its OpenAI calls and 9router then answers with SSE chunks,
 // which supermemory can't parse ("Invalid JSON response"). This forces "stream": false when unset.
-// Usage: LLM_PROXY_TARGET=http://127.0.0.1:20128/v1 LLM_PROXY_PORT=20129 bun src/llm-proxy.ts
+// Usage: OPENAI_BASE_URL=http://127.0.0.1:20128/v1 LLM_PROXY_PORT=20129 bun src/llm-proxy.ts
 
 const TARGET = process.env.OPENAI_BASE_URL!.replace(/\/$/, '');
 const PORT = Number(process.env.LLM_PROXY_PORT);
