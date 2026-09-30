@@ -9,16 +9,20 @@ export const SupermemoryLocal: Plugin = async ({ $, client, directory }) => {
 	const run = (event: string, payload: Record<string, unknown>) =>
 		$`${HOOK_CMD} opencode ${event} < ${new Response(JSON.stringify({ cwd: directory, ...payload }))}`.quiet().nothrow().text();
 
-	// Full recall once per session, then each turn appends what other agents/sessions stored since
-	const context = new Map<string, string>();
+	// Full recall once per session, then each turn appends what other agents/sessions stored since.
+	// ponytail: only the newest MAX_DELTAS deltas are kept after the start block, so the system prompt stays bounded
+	const MAX_DELTAS = 5;
+	const context = new Map<string, string[]>();
 
 	return {
 		'experimental.chat.system.transform': async (input, output) => {
 			const id = input.sessionID ?? 'default';
-			const delta = (await run(context.has(id) ? 'sync' : 'start', { sessionID: id })).trim();
-			const mem = [context.get(id), delta].filter(Boolean).join('\n\n');
-			context.set(id, mem);
-			if (mem) output.system.push(mem);
+			const blocks = context.get(id) ?? [];
+			const delta = (await run(blocks.length ? 'sync' : 'start', { sessionID: id })).trim();
+			if (delta) blocks.push(delta);
+			if (blocks.length > MAX_DELTAS + 1) blocks.splice(1, 1);
+			context.set(id, blocks);
+			if (blocks.length) output.system.push(blocks.join('\n\n'));
 		},
 		'tool.execute.after': async (input) => {
 			await run('change', {

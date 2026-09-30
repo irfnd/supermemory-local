@@ -3,7 +3,7 @@ import { expect, test } from 'bun:test';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { lastTranscriptText, newSince, stripContext, trimCompactSummary } from './hook-handler.ts';
+import { lastTranscriptText, newSince, pickHits, stripContext, trimCompactSummary } from './hook-handler.ts';
 import { forceNonStream } from './llm-proxy.ts';
 import { cleanText } from './zed-adapter.ts';
 
@@ -59,4 +59,19 @@ test('zed-adapter cleanText unwraps fences, applies stop and restores zeta marke
 	expect(cleanText(undefined)).toBe('');
 	expect(cleanText('x = 1', [], `a ${s} b`)).toBe(`${s}\nx = 1\n${e}`);
 	expect(cleanText(`${s}\nx\n${e}`, [], s)).toBe(`${s}\nx\n${e}`);
+});
+
+test('pickHits drops own-session and already-seen hits and keeps one chunk per document, two at most', () => {
+	const mem = (id: string, session = 'other') => ({ id, memory: id, similarity: 0.8, metadata: { session } });
+	const chunk = (id: string, doc: string) => ({ id, chunk: id, similarity: 0.7, metadata: {}, documents: [{ id: doc }] });
+	const hits = [
+		mem('m1'),
+		mem('m2', 'me'),
+		mem('m3'),
+		chunk('c1', 'd1'),
+		chunk('c2', 'd1'),
+		chunk('c3', 'd2'),
+		chunk('c4', 'd3'),
+	];
+	expect(pickHits(hits, 'me', new Set(['m3'])).map((h) => h.id)).toEqual(['m1', 'c1', 'c3']);
 });

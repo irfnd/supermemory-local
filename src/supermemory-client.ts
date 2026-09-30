@@ -20,6 +20,16 @@ export interface SearchResult {
 	chunks?: { content: string }[];
 }
 
+/** /v4/search result: an extracted memory (`memory`) or, in hybrid mode, a raw document chunk (`chunk`) */
+export interface SearchHit {
+	id: string;
+	memory?: string;
+	chunk?: string;
+	similarity: number;
+	metadata?: Record<string, unknown> | null;
+	documents?: { id: string }[];
+}
+
 export class SupermemoryClient {
 	baseUrl: string;
 	apiKey: string;
@@ -122,6 +132,35 @@ export class SupermemoryClient {
 	async getDocument(id: string): Promise<Document | null> {
 		const res = await this.request<Document>('GET', `/v3/documents/${encodeURIComponent(id)}`);
 		return res.success ? res.data : null;
+	}
+
+	/**
+	 * Memory search (/v4/search). `hybrid` also returns raw document chunks, which covers documents
+	 * whose memory extraction (minutes via 9router) hasn't finished yet
+	 */
+	async search({
+		q,
+		containerTag,
+		searchMode = 'hybrid',
+		limit = 6,
+	}: {
+		q: string;
+		containerTag: string;
+		searchMode?: 'memories' | 'hybrid';
+		limit?: number;
+	}): Promise<SearchHit[]> {
+		const res = await this.request<{ results?: SearchHit[] }>('POST', '/v4/search', { q, containerTag, searchMode, limit });
+		return res.success ? res.data.results || [] : [];
+	}
+
+	/**
+	 * Facts the server extracted for a container tag: `static` (long-lived) and `dynamic` (newest first)
+	 */
+	async profile(containerTag: string): Promise<{ static: string[]; dynamic: string[] } | null> {
+		const res = await this.request<{ profile?: { static: string[]; dynamic: string[] } }>('POST', '/v4/profile', {
+			containerTag,
+		});
+		return res.success ? res.data.profile || null : null;
 	}
 
 	/**

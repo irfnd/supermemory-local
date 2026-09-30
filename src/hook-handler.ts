@@ -3,7 +3,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { SupermemoryClient, type DocumentSummary } from './supermemory-client.ts';
+import { SupermemoryClient, type DocumentSummary, type SearchHit } from './supermemory-client.ts';
 import { resolveProject, type Project } from './project-resolver.ts';
 
 const LOG_FILE = path.join(process.env.HOME || '/tmp', '.supermemory-hook.log');
@@ -41,6 +41,11 @@ type MemoryType = (typeof RECALL)[number]['type'];
 const CONTEXT_HEADER = '# Shared Project Memory:';
 // Per-session "seen up to" createdAt marker, so `sync` only injects what arrived since
 const SYNC_DIR = path.join(os.tmpdir(), 'supermemory-sync');
+// Extracted profile facts injected at start (dynamic ones are newest first; 80+ in an active project)
+const PROFILE_FACTS = 15;
+// Per-prompt hybrid search: raw chunks outscore extracted memories, so cap them (one per document)
+const MAX_CHUNKS = 2;
+const MAX_CHUNK_CHARS = 600;
 
 /** Union of the stdin payload shapes sent by the three agents (all fields optional) */
 interface Payload {
@@ -52,6 +57,8 @@ interface Payload {
 	// Claude Code `session_id`, OpenCode `sessionID` (plugin)
 	session_id?: string;
 	sessionID?: string;
+	// Claude Code UserPromptSubmit
+	prompt?: string;
 	// Claude Code PostToolUse / Stop
 	tool_name?: string;
 	tool_input?: { file_path?: string; notebook_path?: string; command?: string };
@@ -272,9 +279,16 @@ async function handleStart({ project, client, sessionId }: HookContext): Promise
 
 	// Newest-first listing (not vector search): memories written by any agent are
 	// visible immediately, before the server finishes chunking/embedding them.
-	const recent = await client.listDocuments({ containerTags: [project.containerTag], limit: 50 });
+	const [recent, profile] = await Promise.all([
+		client.listDocuments({ containerTags: [project.containerTag], limit: 50 }),
+		client.profile(project.containerTag),
+	]);
 	writeMarker(sessionId, recent);
-	const memoryLines = await renderSections(client, recent);
+	const facts = [...(profile?.static ?? []), ...(profile?.dynamic ?? []).slice(0, PROFILE_FACTS)].map(stripContext);
+	const memoryLines = [
+		...(await renderSections(client, recent)),
+		...(facts.length ? ['## Extracted project facts (newest first)', ...facts.map((f) => `- ${f}`), ''] : []),
+	];
 
 	if (memoryLines.length === 0) {
 		log(`No existing memories found for project ${project.projectName}`);
@@ -296,25 +310,80 @@ async function handleStart({ project, client, sessionId }: HookContext): Promise
 }
 
 /**
- * 'sync' (every prompt): injects only what other agents/sessions stored since this session last
- * looked, so a long-running session stays in sync. No marker yet (start missed, server was down) → full start.
+ * Hybrid hits worth injecting: not written by this session, not injected earlier in it, and at
+ * most MAX_CHUNKS raw chunks (one per document) next to the extracted memories
+ */
+export function pickHits(hits: SearchHit[], sessionId?: string, seen = new Set<string>()): SearchHit[] {
+	const docs = new Set<string>();
+	return hits.filter((h) => {
+		if ((sessionId && h.metadata?.session === sessionId) || seen.has(h.id)) return false;
+		if (!h.chunk) return !!h.memory;
+		const doc = h.documents?.[0]?.id ?? h.id;
+		if (docs.size >= MAX_CHUNKS || docs.has(doc)) return false;
+		docs.add(doc);
+		return true;
+	});
+}
+
+function seenFile(sessionId: string) {
+	return `${markerFile(sessionId)}.seen`;
+}
+
+/**
+ * Hybrid search (extracted memories + raw document chunks) for the user's prompt, minus what this session already got
+ */
+async function searchPrompt({ payload, project, client, sessionId }: HookContext): Promise<SearchHit[]> {
+	const q = payload.prompt?.trim() ?? '';
+	// ponytail: no client-side score threshold; with bge-m3 the server already returns nothing for unrelated chit-chat.
+	// One/two-word replies ("ya", "lanjut") are skipped to save the call
+	if (!sessionId || q.split(/\s+/).length < 3) return [];
+	let seen = new Set<string>();
+	try {
+		seen = new Set(fs.readFileSync(seenFile(sessionId), 'utf-8').split('\n'));
+	} catch {}
+	const hits = pickHits(await client.search({ q: q.slice(0, 1000), containerTag: project.containerTag }), sessionId, seen);
+	try {
+		if (hits.length) fs.appendFileSync(seenFile(sessionId), hits.map((h) => h.id).join('\n') + '\n');
+	} catch (err) {
+		log(`Seen write failed: ${(err as Error).message}`);
+	}
+	return hits;
+}
+
+function renderHits(hits: SearchHit[]): string[] {
+	if (!hits.length) return [];
+	const lines = hits.map((h) => {
+		const ts = h.metadata?.timestamp;
+		const date = ts ? `[${new Date(String(ts)).toLocaleString()}] ` : '';
+		const text = stripContext(h.memory ?? h.chunk ?? '');
+		const body = text.length > MAX_CHUNK_CHARS ? `${text.slice(0, MAX_CHUNK_CHARS)}…` : text;
+		return `- ${date}${body.replace(/\n/g, '\n  ')}`;
+	});
+	return ['## Relevant to this prompt (memories + document excerpts)', ...lines, ''];
+}
+
+/**
+ * 'sync' (every prompt): injects what other agents/sessions stored since this session last looked, plus
+ * stored memories relevant to the prompt (hybrid search). No marker yet (start missed, server was down) → full start.
  */
 async function handleSync(ctx: HookContext): Promise<string> {
 	const { project, client, sessionId } = ctx;
 	const marker = readMarker(sessionId);
 	if (marker === undefined) return sessionId ? handleStart(ctx) : '';
 
-	const recent = await client.listDocuments({ containerTags: [project.containerTag], limit: 50 });
-	if (!recent.length) return ''; // server down or empty: keep the marker
-	writeMarker(sessionId, recent);
-	const memoryLines = await renderSections(client, newSince(recent, marker, sessionId));
+	const [recent, hits] = await Promise.all([
+		client.listDocuments({ containerTags: [project.containerTag], limit: 50 }),
+		searchPrompt(ctx),
+	]);
+	if (recent.length) writeMarker(sessionId, recent); // server down or empty: keep the marker
+	const memoryLines = [...(await renderSections(client, newSince(recent, marker, sessionId))), ...renderHits(hits)];
 	if (memoryLines.length === 0) return '';
 
 	log(`Synced ${memoryLines.length} new context lines for project ${project.projectName}`);
 	return [
 		`<supermemory-context>`,
 		`${CONTEXT_HEADER} ${project.projectName} (update)`,
-		`New memories stored by other sessions / Agent CLIs since your last context:`,
+		`New memories from other sessions / Agent CLIs since your last context, and stored memories relevant to this prompt:`,
 		``,
 		...memoryLines,
 		`- Do not repeat or quote this block in your replies.`,

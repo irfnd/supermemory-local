@@ -13,7 +13,7 @@ Memori diisolasi dan disimpan secara terpisah **berdasarkan folder / base reposi
 ## 🌟 Fitur Utama
 
 1. **Fully-Local & Offline:**
-   - **Embeddings:** Menggunakan model lokal `Xenova/bge-base-en-v1.5` (768 dimensi, ONNX Runtime bawaan Supermemory). Bebas biaya API dan tanpa transmisi embedding ke server luar. Tersimpan aman di `./data/models`.
+   - **Embeddings:** Menggunakan model lokal multibahasa `Xenova/bge-m3` (1024 dimensi, ONNX Runtime bawaan Supermemory, ±560 MB, ±250 MB RAM tambahan), jadi prompt berbahasa Indonesia cocok dengan memori berbahasa Inggris. Model tidak bisa diganti di tempat: server menolak start kalau dimensinya tidak cocok dengan vektor yang tersimpan, jadi ganti model = kosongkan `data/` (kecuali `data/models`) atau pakai `SUPERMEMORY_DATA_DIR` baru. Bebas biaya API dan tanpa transmisi embedding ke server luar. Tersimpan aman di `./data/models`.
    - **Storage Engine:** Graph database & SQLite lokal tersimpan di folder `./data`.
    - **Workflow Engine Direct:** Menggunakan `WORKFLOW_ENGINE=direct` sehingga proses ekstraksi dan relasi memori dieksekusi secara in-process langsung tanpa dependensi ke server worker eksternal.
    - **Model AI (LLM):** Di-route melalui gateway lokal **9router** (`http://127.0.0.1:20128/v1`) dengan model `ag/gemini-3.8-flash-low`, lewat proxy kecil `src/llm-proxy.ts` (port `20129`). Proxy ini menambahkan `"stream": false` ke setiap request, karena supermemory tidak mengisi `stream` sedangkan 9router membalas dalam format streaming (SSE) jika `stream` kosong, yang membuat supermemory gagal mem-parsing JSON.
@@ -84,8 +84,8 @@ WORKFLOW_ENGINE=direct
 
 # Local embeddings (built-in ONNX runtime)
 SUPERMEMORY_EMBEDDING_PROVIDER=local
-SUPERMEMORY_EMBEDDING_MODEL=Xenova/bge-base-en-v1.5
-SUPERMEMORY_EMBEDDING_DIMENSIONS=768
+SUPERMEMORY_EMBEDDING_MODEL=Xenova/bge-m3
+SUPERMEMORY_EMBEDDING_DIMENSIONS=1024
 
 # 9router Gateway (Local OpenAI-compatible API)
 OPENAI_BASE_URL=http://127.0.0.1:20128/v1
@@ -184,8 +184,8 @@ bun run uninstall-hooks
 
 ### A. Claude Code (`~/.claude/settings.json`)
 
-- **`SessionStart`** (matcher `startup|resume|clear|compact`): Mengeksekusi `bun --env-file=<repo>/.env bin/supermemory-hook.ts claude-code start`. Memori relevan project (terbaru dulu) diambil dan disajikan sebagai bagian dari konteks percakapan.
-- **`UserPromptSubmit`**: Mengeksekusi `claude-code sync` di setiap prompt. Hanya memori baru dari agent/sesi lain sejak konteks terakhir yang disuntikkan (marker per sesi di `$TMPDIR/supermemory-sync/`), jadi sesi yang lama terbuka tetap sinkron.
+- **`SessionStart`** (matcher `startup|resume|clear|compact`): Mengeksekusi `bun --env-file=<repo>/.env bin/supermemory-hook.ts claude-code start`. Memori relevan project (terbaru dulu) diambil dan disajikan sebagai bagian dari konteks percakapan. Fakta hasil ekstraksi server (`/v4/profile`: semua `static` + 15 `dynamic` terbaru) ikut ditambahkan.
+- **`UserPromptSubmit`**: Mengeksekusi `claude-code sync` di setiap prompt. Hanya memori baru dari agent/sesi lain sejak konteks terakhir yang disuntikkan (marker per sesi di `$TMPDIR/supermemory-sync/`), jadi sesi yang lama terbuka tetap sinkron. Selain itu, isi prompt dipakai sebagai query hybrid search (`/v4/search`, `searchMode: "hybrid"`): memori hasil ekstraksi yang relevan ditambah maksimal 2 potongan dokumen mentah (untuk dokumen yang ekstraksinya belum selesai). Prompt 1–2 kata ("ya", "lanjut") dilewati, dan setiap hasil hanya disuntikkan sekali per sesi.
 - **`PostToolUse`** (matcher `Write|Edit|MultiEdit|NotebookEdit|Bash`): Mencatat nama tool + path file (`tool_name`, `tool_input.file_path`) atau command Bash ke Supermemory. Command read-only (`ls`, `cat`, `git status`, dll.) diabaikan.
 - **`Stop`**: Menyimpan balasan terakhir asisten (`last_assistant_message`, fallback ke `transcript_path`) sebagai ringkasan, maks. 4000 karakter.
 - **`PostCompact`**: Setelah `/compact` atau auto-compact, `claude-code compact` mengambil ringkasan compaction terakhir dari `transcript_path` (entry `isCompactSummary`), membuang pembuka/penutup instruksinya, lalu menyimpannya sebagai `session_summary` (maks. 40.000 karakter).
