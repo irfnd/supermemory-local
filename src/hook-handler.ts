@@ -334,7 +334,7 @@ function seenFile(sessionId: string) {
  */
 async function searchPrompt({ payload, project, client, sessionId }: HookContext): Promise<SearchHit[]> {
 	const q = payload.prompt?.trim() ?? '';
-	// ponytail: no client-side score threshold; with bge-m3 the server already returns nothing for unrelated chit-chat.
+	// ponytail: no client-side score threshold; with multilingual embeddings the server already returns nothing for unrelated chit-chat.
 	// One/two-word replies ("ya", "lanjut") are skipped to save the call
 	if (!sessionId || q.split(/\s+/).length < 3) return [];
 	let seen = new Set<string>();

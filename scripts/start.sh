@@ -72,7 +72,7 @@ echo -n "→ Checking LLM proxy on port $LLM_PROXY_PORT... "
 if curl -s --connect-timeout 1 "http://127.0.0.1:$LLM_PROXY_PORT/models" >/dev/null 2>&1; then
   echo "✓ Running"
 else
-  OPENAI_BASE_URL="$LLM_UPSTREAM" LLM_PROXY_PORT="$LLM_PROXY_PORT" \
+  OPENAI_BASE_URL="$LLM_UPSTREAM" LLM_PROXY_PORT="$LLM_PROXY_PORT" SUPERMEMORY_EMBEDDING_DIMENSIONS="${SUPERMEMORY_EMBEDDING_DIMENSIONS:-1024}" \
     nohup bun "$PROJECT_ROOT/src/llm-proxy.ts" >> "$DATA_DIR/llm-proxy.log" 2>&1 &
   echo $! > "$PROXY_PID_FILE"
   for i in {1..20}; do
@@ -130,8 +130,8 @@ fi
 echo "→ Starting supermemory-server (binary: $SM_BIN)..."
 
 # Ensure non-interactive environment variables are passed
-export SUPERMEMORY_EMBEDDING_PROVIDER="${SUPERMEMORY_EMBEDDING_PROVIDER:-local}"
-export SUPERMEMORY_EMBEDDING_MODEL="${SUPERMEMORY_EMBEDDING_MODEL:-Xenova/bge-m3}"
+export SUPERMEMORY_EMBEDDING_PROVIDER="${SUPERMEMORY_EMBEDDING_PROVIDER:-openai-compatible}"
+export SUPERMEMORY_EMBEDDING_MODEL="${SUPERMEMORY_EMBEDDING_MODEL:-jina/jina-embeddings-v4}"
 export SUPERMEMORY_EMBEDDING_DIMENSIONS="${SUPERMEMORY_EMBEDDING_DIMENSIONS:-1024}"
 export WORKFLOW_ENGINE="${WORKFLOW_ENGINE:-direct}"
 export PORT="$SM_PORT"
@@ -171,7 +171,7 @@ if [ "$is_up" -eq 1 ]; then
   echo "  - URL:         http://localhost:$SM_PORT"
   echo "  - PID:         $SM_PID (saved in .supermemory.pid)"
   echo "  - Data:        $DATA_DIR"
-  echo "  - Embeddings:  $SUPERMEMORY_EMBEDDING_MODEL (Local ONNX)"
+  echo "  - Embeddings:  $SUPERMEMORY_EMBEDDING_MODEL ($SUPERMEMORY_EMBEDDING_PROVIDER, ${SUPERMEMORY_EMBEDDING_DIMENSIONS}d)"
   echo "  - AI Model:    $OPENAI_MODEL via llm-proxy :$LLM_PROXY_PORT -> $LLM_UPSTREAM"
   echo "  - Log:         $LOG_FILE"
   echo "  - Zed adapter: http://127.0.0.1:$ZED_ADAPTER_PORT/v1/completions"

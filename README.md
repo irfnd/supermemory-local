@@ -13,7 +13,7 @@ Memori diisolasi dan disimpan secara terpisah **berdasarkan folder / base reposi
 ## 🌟 Fitur Utama
 
 1. **Fully-Local & Offline:**
-   - **Embeddings:** Menggunakan model lokal multibahasa `Xenova/bge-m3` (1024 dimensi, ONNX Runtime bawaan Supermemory, ±560 MB, ±250 MB RAM tambahan), jadi prompt berbahasa Indonesia cocok dengan memori berbahasa Inggris. Model tidak bisa diganti di tempat: server menolak start kalau dimensinya tidak cocok dengan vektor yang tersimpan, jadi ganti model = kosongkan `data/` (kecuali `data/models`) atau pakai `SUPERMEMORY_DATA_DIR` baru. Bebas biaya API dan tanpa transmisi embedding ke server luar. Tersimpan aman di `./data/models`.
+   - **Embeddings:** Model embedding multibahasa lewat 9router (OpenAI-compatible, 1024 dimensi, mis. `jina/jina-embeddings-v4`), jadi prompt berbahasa Indonesia cocok dengan memori berbahasa Inggris, tanpa model lokal yang membebani RAM/disk. Server memanggilnya lewat `llm-proxy`, yang menambahkan `dimensions` (server hanya mengirimnya untuk `text-embedding-3-*`, sedangkan Jina v4 default 2048 dan Gemini 3072 dimensi, melebihi batas pgvector 2000). Setiap pencarian menambah ±0,5–1,5 detik dan butuh 9router menyala. Model embedding terkunci per folder data, lihat [Mengganti Model](#mengganti-model).
    - **Storage Engine:** Graph database & SQLite lokal tersimpan di folder `./data`.
    - **Workflow Engine Direct:** Menggunakan `WORKFLOW_ENGINE=direct` sehingga proses ekstraksi dan relasi memori dieksekusi secara in-process langsung tanpa dependensi ke server worker eksternal.
    - **Model AI (LLM):** Di-route melalui gateway lokal **9router** (`http://127.0.0.1:20128/v1`) dengan model `ag/gemini-3.8-flash-low`, lewat proxy kecil `src/llm-proxy.ts` (port `20129`). Proxy ini menambahkan `"stream": false` ke setiap request, karena supermemory tidak mengisi `stream` sedangkan 9router membalas dalam format streaming (SSE) jika `stream` kosong, yang membuat supermemory gagal mem-parsing JSON.
@@ -47,8 +47,7 @@ supermemory-local/
 ├── prettier.config.ts       # Format kode (extends @irfnd/prettier-config), bun run format
 ├── bin/
 │   └── supermemory-hook.ts  # Entrypoint hook CLI serbaguna untuk semua agent
-├── data/                    # Storage graph, SQLite database, & cache model ONNX
-│   ├── models/              # Model weights lokal Xenova (ONNX)
+├── data/                    # Storage graph & database lokal
 │   ├── supermemory.log      # Log runtime server
 │   ├── llm-proxy.log        # Log proxy LLM (status & durasi per request)
 │   └── zed-adapter.log      # Log adapter Zed
@@ -82,9 +81,9 @@ SUPERMEMORY_PORT=6767
 SUPERMEMORY_DATA_DIR=./data
 WORKFLOW_ENGINE=direct
 
-# Local embeddings (built-in ONNX runtime)
-SUPERMEMORY_EMBEDDING_PROVIDER=local
-SUPERMEMORY_EMBEDDING_MODEL=Xenova/bge-m3
+# Embeddings via 9router (lewat llm-proxy yang menambahkan `dimensions`)
+SUPERMEMORY_EMBEDDING_PROVIDER=openai-compatible
+SUPERMEMORY_EMBEDDING_MODEL=jina/jina-embeddings-v4
 SUPERMEMORY_EMBEDDING_DIMENSIONS=1024
 
 # 9router Gateway (Local OpenAI-compatible API)
@@ -233,20 +232,60 @@ Adapter mengirim `reasoning_effort` dari `ZED_ADAPTER_REASONING_EFFORT` (default
 
 ### Membersihkan Data Testing
 
-Jika ingin mengosongkan riwayat memori tanpa harus mengunduh ulang model embedding:
+Jika ingin mengosongkan riwayat memori:
 
 1. Hentikan server:
    ```bash
    ./scripts/stop.sh
    ```
-2. Hapus file data dan runtime (jangan hapus folder `./data/models`):
+2. Hapus file data dan runtime:
    ```bash
-   rm -rf ./data/data ./data/retry-params ./data/runtime ./data/step-data ./data/.instance.lock ./data/supermemory.log
+   rm -rf ./data/data ./data/retry-params ./data/runtime ./data/step-data ./data/.instance.lock ./data/supermemory.log ./data/embedding-plan.json ./data/instance-id ./data/api-key ./data/error.log "${TMPDIR}supermemory-sync"
    ```
 3. Nyalakan kembali server:
    ```bash
    ./scripts/start.sh
    ```
+
+### Mengganti Model
+
+Aturan utamanya: **model embedding terkunci ke folder data, model lain tidak.** Apa pun yang diganti, selalu jalankan `bun run stop` dulu baru `bun run start`. `start.sh` melewati layanan yang sudah berjalan, jadi proses lama tetap memakai `.env` versi lama.
+
+#### Model embedding (`SUPERMEMORY_EMBEDDING_*`)
+
+Server mencatat provider, model, dimensi, dan endpoint di `data/embedding-plan.json`, lalu menolak start (`Embedding model mismatch`) kalau salah satunya berbeda dari `.env`. Endpoint ikut dicatat, jadi mengganti `LLM_PROXY_PORT` juga butuh langkah ini.
+
+1. Cek dimensi model baru lewat 9router. Hasilnya harus ≤ 2000, dan model harus menghormati `dimensions`:
+   ```bash
+   set -a; source .env; set +a
+   curl -s http://127.0.0.1:20128/v1/embeddings -H "Authorization: Bearer $OPENAI_API_KEY" \
+     -H 'Content-Type: application/json' \
+     -d '{"model":"<model-baru>","input":"tes","dimensions":1024}' \
+     | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["data"][0]["embedding"]))'
+   ```
+   Kalau hasilnya bukan 1024, model mengabaikan `dimensions`. Pakai dimensi aslinya (maksimal 2000) di `.env`.
+2. Hentikan semua layanan: `bun run stop`.
+3. Ubah `SUPERMEMORY_EMBEDDING_MODEL` dan `SUPERMEMORY_EMBEDDING_DIMENSIONS` di `.env`.
+4. Kosongkan database (langkah 2 di [Membersihkan Data Testing](#membersihkan-data-testing)). **Semua memori hilang.** Kalau ingin dipertahankan, ekspor dokumennya sebelum langkah ini (`POST /v3/documents/list` lalu `GET /v3/documents/:id`), dan masukkan ulang dengan `POST /v3/documents` setelah langkah 5. Ekstraksi ulang memakai kuota 9router sebanding dengan jumlah dokumen.
+5. Jalankan `bun run start`, lalu pastikan baris `Embeddings:` menampilkan model yang baru.
+
+#### Model LLM ekstraksi memori (`OPENAI_MODEL`)
+
+Model ini tidak terkunci, dan memori lama tetap aman.
+
+1. Pastikan model ada di 9router dan bisa membalas JSON:
+   ```bash
+   curl -s http://127.0.0.1:20128/v1/chat/completions -H "Authorization: Bearer $OPENAI_API_KEY" \
+     -H 'Content-Type: application/json' \
+     -d '{"model":"<model-baru>","stream":false,"response_format":{"type":"json_object"},"messages":[{"role":"user","content":"balas {\"ok\":true}"}]}'
+   ```
+2. Ubah `OPENAI_MODEL` di `.env`, lalu jalankan `bun run stop && bun run start`.
+3. Cek `data/llm-proxy.log`: panggilan baru harus berstatus `200`, dan dokumen baru harus sampai ke status `done`.
+
+#### Model edit prediction Zed, port, dan key
+
+- **Model Zed:** ganti di pengaturan Zed. Adapter meneruskan `model` dari request apa adanya, jadi tidak perlu restart. `ZED_ADAPTER_REASONING_EFFORT` butuh `bun run stop && bun run start`.
+- **`NINEROUTER_PORT`, `OPENAI_API_KEY`, `OPENAI_BASE_URL`:** cukup `./scripts/stop.sh --all && bun run start`.
 
 ### Menghapus Dokumen Satu Container Tag
 

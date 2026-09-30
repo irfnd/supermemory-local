@@ -73,7 +73,7 @@ if curl -s --connect-timeout 2 "http://localhost:$SM_PORT/v4/search" \
   -d '{"q":"ping","limit":1}' >/dev/null 2>&1; then
   echo "   ● HTTP API: Healthy on http://localhost:$SM_PORT"
   echo "   ● Storage:  ${SUPERMEMORY_DATA_DIR:-./data}"
-  echo "   ● Embeddings: ${SUPERMEMORY_EMBEDDING_MODEL:-Xenova/bge-m3} (Local)"
+  echo "   ● Embeddings: ${SUPERMEMORY_EMBEDDING_MODEL:-jina/jina-embeddings-v4} (${SUPERMEMORY_EMBEDDING_PROVIDER:-openai-compatible})"
 else
   echo "   ○ HTTP API: Not responding on port $SM_PORT"
 fi

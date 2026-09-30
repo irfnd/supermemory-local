@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { lastTranscriptText, newSince, pickHits, stripContext, trimCompactSummary } from './hook-handler.ts';
-import { forceNonStream } from './llm-proxy.ts';
+import { rewriteBody } from './llm-proxy.ts';
 import { cleanText } from './zed-adapter.ts';
 
 const block = (inner: string) => `<supermemory-context>\n# Shared Project Memory: p (/x)\n${inner}\n</supermemory-context>`;
@@ -20,11 +20,13 @@ test('stripContext keeps plain mentions of the tag in prose', () => {
 	expect(stripContext(prose)).toBe(prose);
 });
 
-test('forceNonStream sets stream:false only when unset', () => {
-	expect(JSON.parse(forceNonStream('{"model":"m"}')).stream).toBe(false);
-	expect(JSON.parse(forceNonStream('{"stream":true}')).stream).toBe(true);
-	expect(forceNonStream('not json')).toBe('not json');
-	expect(forceNonStream('')).toBe('');
+test('rewriteBody sets stream:false on chat and dimensions on embeddings, only when unset', () => {
+	expect(JSON.parse(rewriteBody('{"model":"m"}', '/chat/completions')).stream).toBe(false);
+	expect(JSON.parse(rewriteBody('{"stream":true}', '/chat/completions')).stream).toBe(true);
+	expect(rewriteBody('not json', '/chat/completions')).toBe('not json');
+	expect(rewriteBody('', '/chat/completions')).toBe('');
+	expect(JSON.parse(rewriteBody('{"input":"x"}', '/embeddings', 1024))).toEqual({ input: 'x', dimensions: 1024 });
+	expect(JSON.parse(rewriteBody('{"input":"x","dimensions":768}', '/embeddings', 1024)).dimensions).toBe(768);
 });
 
 test('newSince keeps only newer docs from other sessions', () => {
