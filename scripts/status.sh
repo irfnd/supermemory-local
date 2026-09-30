@@ -18,6 +18,8 @@ NINEROUTER_PORT="${NINEROUTER_PORT:-20128}"
 NINEROUTER_URL="http://127.0.0.1:${NINEROUTER_PORT}/v1"
 SM_PORT="${PORT:-6767}"
 PID_FILE="$PROJECT_ROOT/.supermemory.pid"
+DATA_DIR="${SUPERMEMORY_DATA_DIR:-./data}"
+[[ "$DATA_DIR" = /* ]] || DATA_DIR="$PROJECT_ROOT/${DATA_DIR#./}"
 
 echo "========================================================"
 echo " Supermemory Local & 9router Status"
@@ -36,7 +38,7 @@ fi
 
 LLM_PROXY_PORT="${LLM_PROXY_PORT:-20129}"
 if curl -s --connect-timeout 2 "http://127.0.0.1:$LLM_PROXY_PORT/models" >/dev/null 2>&1; then
-  echo "   ● LLM proxy: Running on http://127.0.0.1:$LLM_PROXY_PORT (forces stream:false)"
+  echo "   ● LLM proxy: Running on http://127.0.0.1:$LLM_PROXY_PORT (stream:false + embedding dimensions)"
 else
   echo "   ○ LLM proxy: NOT running (supermemory memory generation will fail)"
 fi
@@ -72,7 +74,8 @@ if curl -s --connect-timeout 2 "http://localhost:$SM_PORT/v4/search" \
   -H "Content-Type: application/json" \
   -d '{"q":"ping","limit":1}' >/dev/null 2>&1; then
   echo "   ● HTTP API: Healthy on http://localhost:$SM_PORT"
-  echo "   ● Storage:  ${SUPERMEMORY_DATA_DIR:-./data}"
+  echo "   ● Storage:  $DATA_DIR/$(readlink "$DATA_DIR/current" 2>/dev/null || echo "?")"
+  echo "   ● Stores:   $(ls "$DATA_DIR/stores" 2>/dev/null | tr '\n' ' ')"
   echo "   ● Embeddings: ${SUPERMEMORY_EMBEDDING_MODEL:-jina/jina-embeddings-v4} (${SUPERMEMORY_EMBEDDING_PROVIDER:-openai-compatible})"
 else
   echo "   ○ HTTP API: Not responding on port $SM_PORT"

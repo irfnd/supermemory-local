@@ -1,6 +1,6 @@
 # Supermemory Local + 9router Integration
 
-Project untuk menjalankan **Supermemory** ([supermemory.ai](https://supermemory.ai/docs/self-hosting/overview)) secara **fully-local** dengan model AI dari **9router** (terinstall global), ditulis dalam TypeScript dan dijalankan langsung dengan **Bun** (tanpa build), dilengkapi sistem hooks otomatis untuk:
+Project untuk menjalankan server **Supermemory** ([supermemory.ai](https://supermemory.ai/docs/self-hosting/overview)) secara lokal, dengan model embedding dan LLM dari **9router** (terinstall global), ditulis dalam TypeScript dan dijalankan langsung dengan **Bun** (tanpa build), dilengkapi sistem hooks otomatis untuk:
 
 - **Claude Code** (`claude-code`)
 - **Antigravity** (`antigravity`)
@@ -12,11 +12,11 @@ Memori diisolasi dan disimpan secara terpisah **berdasarkan folder / base reposi
 
 ## 🌟 Fitur Utama
 
-1. **Fully-Local & Offline:**
-   - **Embeddings:** Model embedding multibahasa lewat 9router (OpenAI-compatible, 1024 dimensi, mis. `jina/jina-embeddings-v4`), jadi prompt berbahasa Indonesia cocok dengan memori berbahasa Inggris, tanpa model lokal yang membebani RAM/disk. Server memanggilnya lewat `llm-proxy`, yang menambahkan `dimensions` (server hanya mengirimnya untuk `text-embedding-3-*`, sedangkan Jina v4 default 2048 dan Gemini 3072 dimensi, melebihi batas pgvector 2000). Setiap pencarian menambah ±0,5–1,5 detik dan butuh 9router menyala. Model embedding terkunci per folder data, lihat [Mengganti Model](#mengganti-model).
-   - **Storage Engine:** Graph database & SQLite lokal tersimpan di folder `./data`.
+1. **Server Lokal, Model via 9router (bisa diganti kapan saja):**
+   - **Embeddings:** Model embedding multibahasa lewat 9router (`SUPERMEMORY_EMBEDDING_MODEL`, OpenAI-compatible, 1024 dimensi, mis. `jina/jina-embeddings-v4`), jadi prompt berbahasa Indonesia cocok dengan memori berbahasa Inggris, tanpa model lokal yang membebani RAM/disk. Server memanggilnya lewat `llm-proxy`, yang menambahkan `dimensions` (server hanya mengirimnya untuk `text-embedding-3-*`, sedangkan Jina v4 default 2048 dan Gemini 3072 dimensi, melebihi batas pgvector 2000). Setiap pencarian menambah ±0,5–1,5 detik dan butuh 9router menyala.
+   - **Storage per Model Embedding:** Database lokal tersimpan di `./data/stores/<model>-<dim>d/`, satu store per model embedding, dan `./data/current` menunjuk ke store aktif. Server mengunci satu folder data ke model yang pertama mengisinya, jadi `start.sh` memilih (atau membuat) store milik model di `.env`. Mengganti model cukup ubah `.env` lalu restart, dan kembali ke model lama memulihkan memorinya. Lihat [Mengganti Model](#mengganti-model).
    - **Workflow Engine Direct:** Menggunakan `WORKFLOW_ENGINE=direct` sehingga proses ekstraksi dan relasi memori dieksekusi secara in-process langsung tanpa dependensi ke server worker eksternal.
-   - **Model AI (LLM):** Di-route melalui gateway lokal **9router** (`http://127.0.0.1:20128/v1`) dengan model `ag/gemini-3.8-flash-low`, lewat proxy kecil `src/llm-proxy.ts` (port `20129`). Proxy ini menambahkan `"stream": false` ke setiap request, karena supermemory tidak mengisi `stream` sedangkan 9router membalas dalam format streaming (SSE) jika `stream` kosong, yang membuat supermemory gagal mem-parsing JSON.
+   - **Model AI (LLM):** Ekstraksi memori memakai `OPENAI_MODEL` (mis. `ag/gemini-3.8-flash-low` atau `cc/claude-haiku-4-5-20251001`) lewat gateway lokal **9router** (`http://127.0.0.1:20128/v1`) dan proxy kecil `src/llm-proxy.ts` (port `20129`). Proxy ini menambahkan `"stream": false` ke request chat, karena supermemory tidak mengisi `stream` sedangkan 9router membalas dalam format streaming (SSE) jika `stream` kosong, yang membuat supermemory gagal mem-parsing JSON.
 
 2. **Per-Project & Cross-Agent Shared Memory:**
    - Otomatis mendeteksi root repository Git (`git rev-parse --show-toplevel`) atau direktori kerja saat ini.
@@ -26,7 +26,7 @@ Memori diisolasi dan disimpan secara terpisah **berdasarkan folder / base reposi
    - **Lintas Agent:** Pekerjaan yang dilakukan oleh Claude Code langsung terbaca saat Anda membuka project yang sama di Antigravity atau OpenCode.
 
 3. **Lifecycle Hooks Terpadu:**
-   - **Start / Check:** Saat sesi dibuka atau sebelum giliran prompt dimulai, sistem mengambil memori terbaru project tersebut (maks. 5 ringkasan sesi + 10 perubahan, terbaru dulu) dan menginjeksinya ke konteks prompt (`<supermemory-context>`). Memori dari agent lain langsung terbaca tanpa menunggu proses embedding selesai. Blok `<supermemory-context>` yang dikutip ulang oleh agent otomatis dibuang sebelum disimpan, jadi konteks tidak menumpuk berlapis.
+   - **Start / Check:** Saat sesi dibuka atau sebelum giliran prompt dimulai, sistem mengambil memori terbaru project tersebut (maks. 5 ringkasan sesi + 10 perubahan terbaru, ditambah fakta hasil ekstraksi server) dan menginjeksinya ke konteks prompt (`<supermemory-context>`). Memori dari agent lain langsung terbaca tanpa menunggu proses embedding selesai. Blok `<supermemory-context>` yang dikutip ulang oleh agent otomatis dibuang sebelum disimpan, jadi konteks tidak menumpuk berlapis.
    - **Change Observation:** Setiap kali ada modifikasi file atau eksekusi tool, perubahannya dicatat ke Supermemory.
    - **Stop / Session End:** Saat sesi berhenti atau idle, ringkasan sesi disimpan ke Supermemory untuk referensi di sesi berikutnya.
 
@@ -40,28 +40,30 @@ Memori diisolasi dan disimpan secara terpisah **berdasarkan folder / base reposi
 
 ```text
 supermemory-local/
-├── .env                     # Konfigurasi port, model 9router, data dir, direct workflow
+├── .env                     # Konfigurasi port, model embedding & LLM 9router, data dir, direct workflow
 ├── .env.example             # Template konfigurasi
 ├── package.json             # Scripts bun (runtime tanpa dependensi; devDependencies hanya types, tsc & prettier)
 ├── tsconfig.json            # Konfigurasi TypeScript (bun run typecheck)
 ├── prettier.config.ts       # Format kode (extends @irfnd/prettier-config), bun run format
 ├── bin/
 │   └── supermemory-hook.ts  # Entrypoint hook CLI serbaguna untuk semua agent
-├── data/                    # Storage graph & database lokal
+├── data/                    # Log + database lokal
+│   ├── stores/<model>-<dim>d/ # Satu database per model embedding (api-key, embedding-plan.json, ...)
+│   ├── current -> stores/…  # Symlink ke store aktif (dibuat start.sh)
 │   ├── supermemory.log      # Log runtime server
 │   ├── llm-proxy.log        # Log proxy LLM (status & durasi per request)
 │   └── zed-adapter.log      # Log adapter Zed
 ├── scripts/
-│   ├── start.sh             # Menjalankan 9router + llm-proxy + zed-adapter + supermemory-server
+│   ├── start.sh             # Menjalankan 9router + llm-proxy + zed-adapter + supermemory-server (store sesuai model embedding)
 │   ├── stop.sh              # Menghentikan supermemory-server + llm-proxy + zed-adapter (--all: juga 9router)
-│   └── status.sh            # Cek status kesehatan, port, dan model 9router
+│   └── status.sh            # Cek status kesehatan, port, model, store aktif & daftar store
 └── src/
     ├── hook-handler.ts      # Handler lifecycle (start, change, stop)
     ├── project-resolver.ts  # Deteksi root Git & hashing tag project
     ├── supermemory-client.ts# Client API HTTP lokal
     ├── installer.ts         # Pasang/copot hooks ke agent CLIs (Claude, Antigravity, OpenCode)
     ├── opencode-plugin.ts   # Plugin native OpenCode (template)
-    ├── llm-proxy.ts         # Proxy supermemory → 9router (memaksa stream:false)
+    ├── llm-proxy.ts         # Proxy supermemory → 9router (stream:false di chat, dimensions di embeddings)
     ├── zed-adapter.ts       # Adapter Zed edit prediction: /v1/completions → 9router /chat/completions
     ├── hooks.test.ts        # Unit test (bun test)
     └── test-memory.ts       # Script verifikasi pembacaan & penulisan memori
@@ -78,7 +80,7 @@ File `.env` sudah diinisialisasi dengan konfigurasi default:
 ```ini
 PORT=6767
 SUPERMEMORY_PORT=6767
-SUPERMEMORY_DATA_DIR=./data
+SUPERMEMORY_DATA_DIR=./data   # log + data/stores/<model>-<dim>d per model embedding
 WORKFLOW_ENGINE=direct
 
 # Embeddings via 9router (lewat llm-proxy yang menambahkan `dimensions`)
@@ -89,17 +91,17 @@ SUPERMEMORY_EMBEDDING_DIMENSIONS=1024
 # 9router Gateway (Local OpenAI-compatible API)
 OPENAI_BASE_URL=http://127.0.0.1:20128/v1
 OPENAI_API_KEY=<your-9router-api-key>
-OPENAI_MODEL=ag/gemini-3.8-flash-low
+OPENAI_MODEL=ag/gemini-3.8-flash-low   # LLM ekstraksi memori (butuh JSON + tool calling)
 
 # Supermemory Client API (dipakai hooks)
 SUPERMEMORY_API_URL=http://127.0.0.1:6767
-SUPERMEMORY_API_KEY=sm_local_key   # placeholder: client memakai data/api-key buatan server
+SUPERMEMORY_API_KEY=sm_local_key   # placeholder: client memakai data/current/api-key buatan server
 
 # 9router
 NINEROUTER_PORT=20128
 NINEROUTER_HOST=127.0.0.1
 
-# Proxy LLM supermemory → 9router (memaksa "stream": false)
+# Proxy supermemory → 9router ("stream": false di chat, `dimensions` di embeddings)
 LLM_PROXY_PORT=20129
 
 # Adapter Zed edit prediction (pakai OPENAI_BASE_URL + OPENAI_API_KEY di atas)
@@ -107,7 +109,7 @@ ZED_ADAPTER_PORT=20130
 ZED_ADAPTER_REASONING_EFFORT=none
 ```
 
-> **Catatan Model:** `ag/gemini-3.8-flash-low` sudah teruji bisa mengekstrak memori (tool calling & JSON) selama server berjalan lewat `llm-proxy` (otomatis dari `bun run start`). Tanpa proxy, 9router membalas dalam format streaming dan semua dokumen berakhir `failed` dengan error "Invalid JSON response".
+> **Catatan Model:** `ag/gemini-3.8-flash-low` (±50 detik per panggilan) dan `cc/claude-haiku-4-5-20251001` (±1–5 detik) sudah teruji bisa mengekstrak memori (tool calling & JSON) selama server berjalan lewat `llm-proxy` (otomatis dari `bun run start`). Tanpa proxy, 9router membalas dalam format streaming dan semua dokumen berakhir `failed` dengan error "Invalid JSON response". Untuk mengganti model, lihat [Mengganti Model](#mengganti-model).
 
 ---
 
@@ -232,16 +234,17 @@ Adapter mengirim `reasoning_effort` dari `ZED_ADAPTER_REASONING_EFFORT` (default
 
 ### Membersihkan Data Testing
 
-Jika ingin mengosongkan riwayat memori:
+Jika ingin mengosongkan riwayat memori model embedding yang sedang aktif:
 
 1. Hentikan server:
    ```bash
    ./scripts/stop.sh
    ```
-2. Hapus file data dan runtime:
+2. Hapus store aktif beserta marker sesi hook:
    ```bash
-   rm -rf ./data/data ./data/retry-params ./data/runtime ./data/step-data ./data/.instance.lock ./data/supermemory.log ./data/embedding-plan.json ./data/instance-id ./data/api-key ./data/error.log "${TMPDIR}supermemory-sync"
+   rm -rf "./data/$(readlink ./data/current)" "${TMPDIR}supermemory-sync"
    ```
+   Untuk mengosongkan semua model sekaligus: `rm -rf ./data/stores ./data/current "${TMPDIR}supermemory-sync"`.
 3. Nyalakan kembali server:
    ```bash
    ./scripts/start.sh
@@ -249,11 +252,11 @@ Jika ingin mengosongkan riwayat memori:
 
 ### Mengganti Model
 
-Aturan utamanya: **model embedding terkunci ke folder data, model lain tidak.** Apa pun yang diganti, selalu jalankan `bun run stop` dulu baru `bun run start`. `start.sh` melewati layanan yang sudah berjalan, jadi proses lama tetap memakai `.env` versi lama.
+Semua model diatur di `.env`, dan setiap penggantian cukup diikuti `bun run stop && bun run start`. `start.sh` melewati layanan yang sudah berjalan, jadi tanpa `stop` proses lama tetap memakai `.env` versi lama.
 
 #### Model embedding (`SUPERMEMORY_EMBEDDING_*`)
 
-Server mencatat provider, model, dimensi, dan endpoint di `data/embedding-plan.json`, lalu menolak start (`Embedding model mismatch`) kalau salah satunya berbeda dari `.env`. Endpoint ikut dicatat, jadi mengganti `LLM_PROXY_PORT` juga butuh langkah ini.
+Server mengunci folder data ke provider, model, dimensi, dan endpoint yang pertama mengisinya (`embedding-plan.json`), lalu menolak start (`Embedding model mismatch`) kalau `.env` berbeda. Karena itu `start.sh` memakai satu store per model di `data/stores/<model>-<dim>d/`. Mengganti model tidak menghapus apa pun: model baru mendapat store kosong, dan kembali ke model lama membuka store lamanya lagi. Memori tidak dibagi antar model, karena embedding dari model berbeda tidak bisa dibandingkan.
 
 1. Cek dimensi model baru lewat 9router. Hasilnya harus ≤ 2000, dan model harus menghormati `dimensions`:
    ```bash
@@ -263,11 +266,14 @@ Server mencatat provider, model, dimensi, dan endpoint di `data/embedding-plan.j
      -d '{"model":"<model-baru>","input":"tes","dimensions":1024}' \
      | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["data"][0]["embedding"]))'
    ```
-   Kalau hasilnya bukan 1024, model mengabaikan `dimensions`. Pakai dimensi aslinya (maksimal 2000) di `.env`.
-2. Hentikan semua layanan: `bun run stop`.
-3. Ubah `SUPERMEMORY_EMBEDDING_MODEL` dan `SUPERMEMORY_EMBEDDING_DIMENSIONS` di `.env`.
-4. Kosongkan database (langkah 2 di [Membersihkan Data Testing](#membersihkan-data-testing)). **Semua memori hilang.** Kalau ingin dipertahankan, ekspor dokumennya sebelum langkah ini (`POST /v3/documents/list` lalu `GET /v3/documents/:id`), dan masukkan ulang dengan `POST /v3/documents` setelah langkah 5. Ekstraksi ulang memakai kuota 9router sebanding dengan jumlah dokumen.
-5. Jalankan `bun run start`, lalu pastikan baris `Embeddings:` menampilkan model yang baru.
+   Kalau hasilnya bukan 1024, model mengabaikan `dimensions`. Pakai dimensi aslinya (maksimal 2000) di `SUPERMEMORY_EMBEDDING_DIMENSIONS`.
+2. Ubah `SUPERMEMORY_EMBEDDING_MODEL` (dan `SUPERMEMORY_EMBEDDING_DIMENSIONS` bila perlu) di `.env`.
+3. Jalankan `bun run stop && bun run start`, lalu pastikan baris `Data:` dan `Embeddings:` menunjuk ke model baru. `bun run status` menampilkan store aktif dan daftar semua store.
+4. Opsional:
+   - Hapus store model yang tidak dipakai lagi: `rm -rf ./data/stores/<nama-store>`.
+   - Bawa memori lama ke model baru: ekspor dari store lama (`POST /v3/documents/list` lalu `GET /v3/documents/:id`) sebelum langkah 2, lalu masukkan ulang dengan `POST /v3/documents` setelah langkah 3. Ekstraksi ulang memakai kuota 9router sebanding dengan jumlah dokumen.
+
+> Endpoint embedding (`http://127.0.0.1:$LLM_PROXY_PORT`) ikut terkunci, jadi mengganti `LLM_PROXY_PORT` membuat store yang ada menolak start. Kembalikan port-nya, atau hapus store tersebut.
 
 #### Model LLM ekstraksi memori (`OPENAI_MODEL`)
 
@@ -279,7 +285,7 @@ Model ini tidak terkunci, dan memori lama tetap aman.
      -H 'Content-Type: application/json' \
      -d '{"model":"<model-baru>","stream":false,"response_format":{"type":"json_object"},"messages":[{"role":"user","content":"balas {\"ok\":true}"}]}'
    ```
-2. Ubah `OPENAI_MODEL` di `.env`, lalu jalankan `bun run stop && bun run start`.
+2. Ubah `OPENAI_MODEL` di `.env`, lalu jalankan `bun run stop && bun run start`. Store dan memori tidak berubah.
 3. Cek `data/llm-proxy.log`: panggilan baru harus berstatus `200`, dan dokumen baru harus sampai ke status `done`.
 
 #### Model edit prediction Zed, port, dan key
