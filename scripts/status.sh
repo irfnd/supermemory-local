@@ -76,7 +76,7 @@ if curl -s --connect-timeout 2 "http://localhost:$SM_PORT/v4/search" \
   echo "   ● HTTP API: Healthy on http://localhost:$SM_PORT"
   echo "   ● Storage:  $DATA_DIR/$(readlink "$DATA_DIR/current" 2>/dev/null || echo "?")"
   echo "   ● Stores:   $(ls "$DATA_DIR/stores" 2>/dev/null | tr '\n' ' ')"
-  echo "   ● Embeddings: ${SUPERMEMORY_EMBEDDING_MODEL:-jina/jina-embeddings-v4} (${SUPERMEMORY_EMBEDDING_PROVIDER:-openai-compatible})"
+  echo "   ● Embeddings: ${SUPERMEMORY_EMBEDDING_MODEL:-Xenova/bge-base-en-v1.5} (${SUPERMEMORY_EMBEDDING_PROVIDER:-local}), translate: ${TRANSLATE_MODEL:-off}"
 else
   echo "   ○ HTTP API: Not responding on port $SM_PORT"
 fi

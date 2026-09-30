@@ -26,6 +26,21 @@ export function rewriteBody(body: string, path: string, dimensions = DIMENSIONS)
 	return body;
 }
 
+/**
+ * supermemory validates embedding responses against OpenAI's schema, which needs `usage.prompt_tokens`. Some 9router
+ * providers (Jina) only send `total_tokens`, and the whole response is then rejected as "Invalid JSON response".
+ */
+export function fixEmbeddingResponse(body: string): string {
+	try {
+		const json = JSON.parse(body);
+		const usage = json?.usage;
+		if (usage && typeof usage === 'object' && usage.prompt_tokens === undefined) {
+			return JSON.stringify({ ...json, usage: { ...usage, prompt_tokens: usage.total_tokens ?? 0 } });
+		}
+	} catch {}
+	return body;
+}
+
 async function proxy(req: Request): Promise<Response> {
 	const started = Date.now();
 	const url = new URL(req.url);
@@ -41,6 +56,9 @@ async function proxy(req: Request): Promise<Response> {
 		const out = new Headers(up.headers);
 		out.delete('content-encoding');
 		out.delete('content-length');
+		if (up.ok && url.pathname.endsWith('/embeddings')) {
+			return new Response(fixEmbeddingResponse(await up.text()), { status: up.status, headers: out });
+		}
 		return new Response(up.body, { status: up.status, headers: out });
 	} catch (err) {
 		const message = (err as Error).message;

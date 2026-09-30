@@ -72,7 +72,7 @@ echo -n "→ Checking LLM proxy on port $LLM_PROXY_PORT... "
 if curl -s --connect-timeout 1 "http://127.0.0.1:$LLM_PROXY_PORT/models" >/dev/null 2>&1; then
   echo "✓ Running"
 else
-  OPENAI_BASE_URL="$LLM_UPSTREAM" LLM_PROXY_PORT="$LLM_PROXY_PORT" SUPERMEMORY_EMBEDDING_DIMENSIONS="${SUPERMEMORY_EMBEDDING_DIMENSIONS:-1024}" \
+  OPENAI_BASE_URL="$LLM_UPSTREAM" LLM_PROXY_PORT="$LLM_PROXY_PORT" SUPERMEMORY_EMBEDDING_DIMENSIONS="${SUPERMEMORY_EMBEDDING_DIMENSIONS:-768}" \
     nohup bun "$PROJECT_ROOT/src/llm-proxy.ts" >> "$DATA_DIR/llm-proxy.log" 2>&1 &
   echo $! > "$PROXY_PID_FILE"
   for i in {1..20}; do
@@ -130,9 +130,9 @@ fi
 echo "→ Starting supermemory-server (binary: $SM_BIN)..."
 
 # Ensure non-interactive environment variables are passed
-export SUPERMEMORY_EMBEDDING_PROVIDER="${SUPERMEMORY_EMBEDDING_PROVIDER:-openai-compatible}"
-export SUPERMEMORY_EMBEDDING_MODEL="${SUPERMEMORY_EMBEDDING_MODEL:-jina/jina-embeddings-v4}"
-export SUPERMEMORY_EMBEDDING_DIMENSIONS="${SUPERMEMORY_EMBEDDING_DIMENSIONS:-1024}"
+export SUPERMEMORY_EMBEDDING_PROVIDER="${SUPERMEMORY_EMBEDDING_PROVIDER:-local}"
+export SUPERMEMORY_EMBEDDING_MODEL="${SUPERMEMORY_EMBEDDING_MODEL:-Xenova/bge-base-en-v1.5}"
+export SUPERMEMORY_EMBEDDING_DIMENSIONS="${SUPERMEMORY_EMBEDDING_DIMENSIONS:-768}"
 # One store per embedding model: the server locks a data dir to the model that first embedded into it, so switching
 # SUPERMEMORY_EMBEDDING_MODEL/DIMENSIONS opens (or creates) that model's own store instead of failing on boot.
 # data/current points at the active store; hooks read its api-key.

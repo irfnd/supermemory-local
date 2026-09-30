@@ -3,8 +3,8 @@ import { expect, test } from 'bun:test';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { lastTranscriptText, newSince, pickHits, stripContext, trimCompactSummary } from './hook-handler.ts';
-import { rewriteBody } from './llm-proxy.ts';
+import { isEnglish, lastTranscriptText, newSince, pickHits, stripContext, trimCompactSummary } from './hook-handler.ts';
+import { fixEmbeddingResponse, rewriteBody } from './llm-proxy.ts';
 import { cleanText } from './zed-adapter.ts';
 
 const block = (inner: string) => `<supermemory-context>\n# Shared Project Memory: p (/x)\n${inner}\n</supermemory-context>`;
@@ -27,6 +27,16 @@ test('rewriteBody sets stream:false on chat and dimensions on embeddings, only w
 	expect(rewriteBody('', '/chat/completions')).toBe('');
 	expect(JSON.parse(rewriteBody('{"input":"x"}', '/embeddings', 1024))).toEqual({ input: 'x', dimensions: 1024 });
 	expect(JSON.parse(rewriteBody('{"input":"x","dimensions":768}', '/embeddings', 1024)).dimensions).toBe(768);
+});
+
+test('fixEmbeddingResponse adds usage.prompt_tokens when a provider only sends total_tokens', () => {
+	expect(JSON.parse(fixEmbeddingResponse('{"data":[],"usage":{"total_tokens":6}}')).usage).toEqual({
+		total_tokens: 6,
+		prompt_tokens: 6,
+	});
+	expect(JSON.parse(fixEmbeddingResponse('{"usage":{"prompt_tokens":2,"total_tokens":6}}')).usage.prompt_tokens).toBe(2);
+	expect(fixEmbeddingResponse('{"data":[]}')).toBe('{"data":[]}');
+	expect(fixEmbeddingResponse('not json')).toBe('not json');
 });
 
 test('newSince keeps only newer docs from other sessions', () => {
@@ -76,4 +86,12 @@ test('pickHits drops own-session and already-seen hits and keeps one chunk per d
 		chunk('c4', 'd3'),
 	];
 	expect(pickHits(hits, 'me', new Set(['m3'])).map((h) => h.id)).toEqual(['m1', 'c1', 'c3']);
+});
+
+test('isEnglish tells English prose from other languages', () => {
+	expect(isEnglish('I fixed the login bug: the refresh token expired after 5 minutes because of the TTL unit.')).toBe(true);
+	expect(isEnglish('Saya sudah memperbaiki bug login: token refresh kedaluwarsa setelah 5 menit karena satuan TTL.')).toBe(false);
+	expect(isEnglish('kenapa token refresh cepat kedaluwarsa?')).toBe(false);
+	expect(isEnglish('为什么刷新令牌很快过期')).toBe(false);
+	expect(isEnglish('fix login bug')).toBe(true);
 });

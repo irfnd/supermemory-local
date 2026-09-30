@@ -13,7 +13,7 @@ Memori diisolasi dan disimpan secara terpisah **berdasarkan folder / base reposi
 ## 🌟 Fitur Utama
 
 1. **Server Lokal, Model via 9router (bisa diganti kapan saja):**
-   - **Embeddings:** Model embedding multibahasa lewat 9router (`SUPERMEMORY_EMBEDDING_MODEL`, OpenAI-compatible, 1024 dimensi, mis. `jina/jina-embeddings-v4`), jadi prompt berbahasa Indonesia cocok dengan memori berbahasa Inggris, tanpa model lokal yang membebani RAM/disk. Server memanggilnya lewat `llm-proxy`, yang menambahkan `dimensions` (server hanya mengirimnya untuk `text-embedding-3-*`, sedangkan Jina v4 default 2048 dan Gemini 3072 dimensi, melebihi batas pgvector 2000). Setiap pencarian menambah ±0,5–1,5 detik dan butuh 9router menyala.
+   - **Embeddings:** Default-nya model lokal `Xenova/bge-base-en-v1.5` (ONNX bawaan server, 768 dimensi, ±106 MB, tanpa panggilan API). Model ini hanya memahami bahasa Inggris, jadi hook menerjemahkan prompt dan ringkasan sesi yang bukan bahasa Inggris lewat `TRANSLATE_MODEL` (model chat di 9router) sebelum dicari atau disimpan. Dengan begitu memori tetap bisa dicari lintas bahasa. Alternatifnya, model embedding multibahasa lewat 9router (`openai-compatible`, mis. `jina/jina-embeddings-v4` 1024 dimensi) dengan `TRANSLATE_MODEL` dikosongkan. Untuk jalur 9router, `llm-proxy` menambahkan `dimensions` (server hanya mengirimnya untuk `text-embedding-3-*`, sedangkan Jina v4 default 2048 dan Gemini 3072, melebihi batas pgvector 2000) dan melengkapi `usage.prompt_tokens` yang tidak dikirim Jina (tanpa itu server menolak respons sebagai "Invalid JSON response").
    - **Storage per Model Embedding:** Database lokal tersimpan di `./data/stores/<model>-<dim>d/`, satu store per model embedding, dan `./data/current` menunjuk ke store aktif. Server mengunci satu folder data ke model yang pertama mengisinya, jadi `start.sh` memilih (atau membuat) store milik model di `.env`. Mengganti model cukup ubah `.env` lalu restart, dan kembali ke model lama memulihkan memorinya. Lihat [Mengganti Model](#mengganti-model).
    - **Workflow Engine Direct:** Menggunakan `WORKFLOW_ENGINE=direct` sehingga proses ekstraksi dan relasi memori dieksekusi secara in-process langsung tanpa dependensi ke server worker eksternal.
    - **Model AI (LLM):** Ekstraksi memori memakai `OPENAI_MODEL` (mis. `ag/gemini-3.8-flash-low` atau `cc/claude-haiku-4-5-20251001`) lewat gateway lokal **9router** (`http://127.0.0.1:20128/v1`) dan proxy kecil `src/llm-proxy.ts` (port `20129`). Proxy ini menambahkan `"stream": false` ke request chat, karena supermemory tidak mengisi `stream` sedangkan 9router membalas dalam format streaming (SSE) jika `stream` kosong, yang membuat supermemory gagal mem-parsing JSON.
@@ -48,7 +48,7 @@ supermemory-local/
 ├── bin/
 │   └── supermemory-hook.ts  # Entrypoint hook CLI serbaguna untuk semua agent
 ├── data/                    # Log + database lokal
-│   ├── stores/<model>-<dim>d/ # Satu database per model embedding (api-key, embedding-plan.json, ...)
+│   ├── stores/<model>-<dim>d/ # Satu database per model embedding (api-key, embedding-plan.json, models/ untuk model lokal, ...)
 │   ├── current -> stores/…  # Symlink ke store aktif (dibuat start.sh)
 │   ├── supermemory.log      # Log runtime server
 │   ├── llm-proxy.log        # Log proxy LLM (status & durasi per request)
@@ -83,10 +83,11 @@ SUPERMEMORY_PORT=6767
 SUPERMEMORY_DATA_DIR=./data   # log + data/stores/<model>-<dim>d per model embedding
 WORKFLOW_ENGINE=direct
 
-# Embeddings via 9router (lewat llm-proxy yang menambahkan `dimensions`)
-SUPERMEMORY_EMBEDDING_PROVIDER=openai-compatible
-SUPERMEMORY_EMBEDDING_MODEL=jina/jina-embeddings-v4
-SUPERMEMORY_EMBEDDING_DIMENSIONS=1024
+# Embeddings lokal (bahasa Inggris saja) + terjemahan otomatis
+SUPERMEMORY_EMBEDDING_PROVIDER=local
+SUPERMEMORY_EMBEDDING_MODEL=Xenova/bge-base-en-v1.5
+SUPERMEMORY_EMBEDDING_DIMENSIONS=768
+TRANSLATE_MODEL=ag/gemini-3.8-flash-low   # model chat 9router untuk menerjemahkan ke bahasa Inggris; kosong = mati
 
 # 9router Gateway (Local OpenAI-compatible API)
 OPENAI_BASE_URL=http://127.0.0.1:20128/v1
@@ -186,9 +187,9 @@ bun run uninstall-hooks
 ### A. Claude Code (`~/.claude/settings.json`)
 
 - **`SessionStart`** (matcher `startup|resume|clear|compact`): Mengeksekusi `bun --env-file=<repo>/.env bin/supermemory-hook.ts claude-code start`. Memori relevan project (terbaru dulu) diambil dan disajikan sebagai bagian dari konteks percakapan. Fakta hasil ekstraksi server (`/v4/profile`: semua `static` + 15 `dynamic` terbaru) ikut ditambahkan.
-- **`UserPromptSubmit`**: Mengeksekusi `claude-code sync` di setiap prompt. Hanya memori baru dari agent/sesi lain sejak konteks terakhir yang disuntikkan (marker per sesi di `$TMPDIR/supermemory-sync/`), jadi sesi yang lama terbuka tetap sinkron. Selain itu, isi prompt dipakai sebagai query hybrid search (`/v4/search`, `searchMode: "hybrid"`): memori hasil ekstraksi yang relevan ditambah maksimal 2 potongan dokumen mentah (untuk dokumen yang ekstraksinya belum selesai). Prompt 1–2 kata ("ya", "lanjut") dilewati, dan setiap hasil hanya disuntikkan sekali per sesi.
+- **`UserPromptSubmit`**: Mengeksekusi `claude-code sync` di setiap prompt. Hanya memori baru dari agent/sesi lain sejak konteks terakhir yang disuntikkan (marker per sesi di `$TMPDIR/supermemory-sync/`), jadi sesi yang lama terbuka tetap sinkron. Selain itu, isi prompt (diterjemahkan dulu ke bahasa Inggris lewat `TRANSLATE_MODEL` jika perlu) dipakai sebagai query hybrid search (`/v4/search`, `searchMode: "hybrid"`): memori hasil ekstraksi yang relevan ditambah maksimal 2 potongan dokumen mentah (untuk dokumen yang ekstraksinya belum selesai). Prompt 1–2 kata ("ya", "lanjut") dilewati, dan setiap hasil hanya disuntikkan sekali per sesi.
 - **`PostToolUse`** (matcher `Write|Edit|MultiEdit|NotebookEdit|Bash`): Mencatat nama tool + path file (`tool_name`, `tool_input.file_path`) atau command Bash ke Supermemory. Command read-only (`ls`, `cat`, `git status`, dll.) diabaikan.
-- **`Stop`**: Menyimpan balasan terakhir asisten (`last_assistant_message`, fallback ke `transcript_path`) sebagai ringkasan, maks. 4000 karakter.
+- **`Stop`**: Menyimpan balasan terakhir asisten (`last_assistant_message`, fallback ke `transcript_path`) sebagai ringkasan, maks. 4000 karakter. Ringkasan yang bukan bahasa Inggris diterjemahkan dulu lewat `TRANSLATE_MODEL`.
 - **`PostCompact`**: Setelah `/compact` atau auto-compact, `claude-code compact` mengambil ringkasan compaction terakhir dari `transcript_path` (entry `isCompactSummary`), membuang pembuka/penutup instruksinya, lalu menyimpannya sebagai `session_summary` (maks. 40.000 karakter).
 
 ### B. Antigravity (`~/.gemini/config/hooks.json`)
@@ -274,6 +275,13 @@ Server mengunci folder data ke provider, model, dimensi, dan endpoint yang perta
    - Bawa memori lama ke model baru: ekspor dari store lama (`POST /v3/documents/list` lalu `GET /v3/documents/:id`) sebelum langkah 2, lalu masukkan ulang dengan `POST /v3/documents` setelah langkah 3. Ekstraksi ulang memakai kuota 9router sebanding dengan jumlah dokumen.
 
 > Endpoint embedding (`http://127.0.0.1:$LLM_PROXY_PORT`) ikut terkunci, jadi mengganti `LLM_PROXY_PORT` membuat store yang ada menolak start. Kembalikan port-nya, atau hapus store tersebut.
+
+#### Terjemahan (`TRANSLATE_MODEL`)
+
+Model embedding yang hanya berbahasa Inggris (mis. `Xenova/bge-base-en-v1.5`) butuh `TRANSLATE_MODEL`, yaitu model chat 9router yang menerjemahkan prompt (`sync`) dan ringkasan sesi (`stop`) ke bahasa Inggris. Teks yang sudah berbahasa Inggris dilewati tanpa panggilan LLM. Catatan perubahan tool dan ringkasan compaction tidak diterjemahkan, karena memori hasil ekstraksi server sudah berbahasa Inggris. Kalau terjemahan gagal atau lewat batas waktu (8 detik untuk prompt, 12 detik untuk ringkasan), teks asli yang dipakai. Prompt berbahasa Indonesia jadi lebih lambat sekitar 1–2 detik.
+
+- Ganti model penerjemah: ubah `TRANSLATE_MODEL` di `.env`. Hook membaca `.env` di setiap panggilan, jadi tidak perlu restart.
+- Model embedding multibahasa (mis. Jina): kosongkan `TRANSLATE_MODEL=`.
 
 #### Model LLM ekstraksi memori (`OPENAI_MODEL`)
 
