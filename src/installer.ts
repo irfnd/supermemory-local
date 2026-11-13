@@ -23,10 +23,10 @@ const OPENCODE_CONFIG = path.join(OPENCODE_DIR, 'opencode.json');
 type Json = Record<string, any>;
 
 const hookCmd = (agent: string, action: string) => `"${BUN}" --env-file="${ENV_FILE}" "${HOOK_BIN}" ${agent} ${action}`;
-const command = (agent: string, action: string) => ({
+const command = (agent: string, action: string, timeout = 15) => ({
 	type: 'command',
 	command: hookCmd(agent, action),
-	timeout: 15,
+	timeout,
 });
 
 /** Parsed JSON file ({} if missing), backed up before we touch it. Throws on bad JSON rather than overwrite it. */
@@ -86,9 +86,15 @@ function installAntigravity() {
 	const hooksData = readConfig(ANTIGRAVITY_HOOKS);
 	hooksData['supermemory-local'] = {
 		enabled: true,
-		PreInvocation: [command('antigravity', 'start')],
-		PostToolUse: [{ matcher: 'write_to_file|replace_file_content|run_command', hooks: [command('antigravity', 'change')] }],
-		Stop: [command('antigravity', 'stop')],
+		// Tight timeouts (docs default 30s): these run inline in the agent loop. start = health 3s + one request round, stop = 8s translation + 5s save
+		PreInvocation: [command('antigravity', 'start', 8)],
+		PostToolUse: [
+			{
+				matcher: 'write_to_file|write_file|replace_file_content|multi_replace_file_content|edit_file|run_command',
+				hooks: [command('antigravity', 'change', 5)],
+			},
+		],
+		Stop: [command('antigravity', 'stop', 15)],
 	};
 	writeConfig(ANTIGRAVITY_HOOKS, hooksData);
 	console.log('✓ Antigravity hooks installed successfully.');

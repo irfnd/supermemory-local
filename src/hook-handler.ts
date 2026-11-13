@@ -64,6 +64,9 @@ interface Payload {
 	tool_input?: { file_path?: string; notebook_path?: string; command?: string };
 	last_assistant_message?: string;
 	transcript_path?: string;
+	// Antigravity (all events)
+	conversationId?: string;
+	transcriptPath?: string;
 	// Antigravity PostToolUse / Stop
 	toolCall?: { name?: string; args?: Record<string, string | undefined> };
 	assistant_response?: string;
@@ -191,6 +194,21 @@ export function lastTranscriptText(transcriptPath: string, pick: (entry: any) =>
 	return '';
 }
 
+/**
+ * Last model reply in an Antigravity transcript (JSONL, `transcript_full.jsonl`). Its Stop payload carries no reply text,
+ * only `transcriptPath`; replies are entries with type PLANNER_RESPONSE and a `content` string (tool-call steps have none)
+ */
+export function lastAgyReply(transcriptPath: string): string {
+	try {
+		const lines = fs.readFileSync(transcriptPath, 'utf-8').trim().split('\n');
+		for (let i = lines.length - 1; i >= 0; i--) {
+			const entry = JSON.parse(lines[i]!);
+			if (entry.type === 'PLANNER_RESPONSE' && typeof entry.content === 'string' && entry.content.trim()) return entry.content;
+		}
+	} catch {}
+	return '';
+}
+
 function getAgentLabel(agent: string): string {
 	switch (agent.toLowerCase()) {
 		case 'claude-code':
@@ -235,7 +253,7 @@ export async function runHook(agent: string, action: string) {
 	const ctx: HookContext = {
 		agent,
 		agentLabel: getAgentLabel(agent),
-		sessionId: payload.session_id || payload.sessionID,
+		sessionId: payload.session_id || payload.sessionID || payload.conversationId,
 		project,
 		payload,
 		client: new SupermemoryClient(),
@@ -244,7 +262,7 @@ export async function runHook(agent: string, action: string) {
 
 	let context = '';
 	if (action === 'start' || action === 'check' || action === 'context') {
-		context = await handleStart(ctx);
+		context = agent === 'antigravity' ? await cachedStart(ctx) : await handleStart(ctx);
 	} else if (action === 'sync' || action === 'prompt') {
 		context = await handleSync(ctx);
 	} else if (action === 'change' || action === 'observation') {
@@ -269,6 +287,23 @@ export async function runHook(agent: string, action: string) {
 export function newSince(recent: DocumentSummary[], marker: string, sessionId?: string): DocumentSummary[] {
 	const since = Date.parse(marker) || 0;
 	return recent.filter((d) => Date.parse(d.createdAt) > since && (!sessionId || d.metadata?.session !== sessionId));
+}
+
+/**
+ * True the first time this exact text is stored for the session (atomic `wx` create, so concurrent hooks race safely).
+ * OpenCode 2.x delivers one event to every live plugin instance, and instances from earlier hot reloads survive, so
+ * each would otherwise save its own copy of the same summary
+ */
+export function firstTime(sessionId: string | undefined, kind: string, text: string): boolean {
+	if (!sessionId) return true;
+	const hash = new Bun.CryptoHasher('sha1').update(text).digest('hex').slice(0, 12);
+	try {
+		fs.mkdirSync(SYNC_DIR, { recursive: true });
+		fs.writeFileSync(`${markerFile(sessionId)}.${kind}-${hash}`, '', { flag: 'wx' });
+		return true;
+	} catch (err) {
+		return (err as NodeJS.ErrnoException).code !== 'EEXIST';
+	}
 }
 
 function markerFile(sessionId: string) {
@@ -357,6 +392,29 @@ async function handleStart({ project, client, sessionId }: HookContext): Promise
 		`- Do not repeat or quote this block in your replies.`,
 		`</supermemory-context>\n`,
 	].join('\n');
+}
+
+// Antigravity PreInvocation fires before every model call (~20 per turn), so reuse the rendered recall for a short while
+const START_CACHE_MS = 30_000;
+
+/**
+ * `handleStart` memoized per session for START_CACHE_MS (an empty result too, so a dead server costs one health check
+ * per window instead of one per model call). ponytail: fixed TTL, so another agent's write shows up ≤30s late
+ */
+async function cachedStart(ctx: HookContext): Promise<string> {
+	if (!ctx.sessionId) return handleStart(ctx);
+	const file = `${markerFile(ctx.sessionId)}.ctx`;
+	try {
+		if (Date.now() - fs.statSync(file).mtimeMs < START_CACHE_MS) return fs.readFileSync(file, 'utf-8');
+	} catch {}
+	const out = await handleStart(ctx);
+	try {
+		fs.mkdirSync(SYNC_DIR, { recursive: true });
+		fs.writeFileSync(file, out);
+	} catch (err) {
+		log(`Start cache write failed: ${(err as Error).message}`);
+	}
+	return out;
 }
 
 /**
@@ -453,8 +511,10 @@ function describeChange({ agent, agentLabel, project, payload }: HookContext): s
 			return '';
 
 		let detail: string;
-		if (toolArgs.TargetFile) {
-			detail = `File: ${toolArgs.TargetFile}\nDescription: ${toolArgs.Description || toolArgs.Instruction || ''}`;
+		// write_to_file/replace_file_content use TargetFile; the newer write_file/edit_file use Path
+		const file = toolArgs.TargetFile || toolArgs.Path;
+		if (file) {
+			detail = `File: ${file}\nDescription: ${toolArgs.Description || toolArgs.Instruction || ''}`;
 		} else if (toolArgs.CommandLine) {
 			if (READONLY_CMD.test(toolArgs.CommandLine)) return '';
 			detail = `Command: ${toolArgs.CommandLine}`;
@@ -503,15 +563,17 @@ async function handleStop(ctx: HookContext) {
 			payload.last_assistant_message ||
 			payload.assistant_response ||
 			(typeof payload.message === 'string' ? payload.message : '') ||
+			(payload.transcriptPath ? lastAgyReply(payload.transcriptPath) : '') ||
 			(payload.transcript_path ? lastTranscriptText(payload.transcript_path, (e) => e.type === 'assistant') : '') ||
 			payload.raw ||
 			'',
 	);
 
-	if (summary.length > 10) {
+	if (summary.length > 10 && firstTime(ctx.sessionId, 'stop', summary)) {
 		// Compaction summaries (handleCompact, up to 40k chars) stay untranslated: too slow for the hook timeout, and the
-		// server's memory extraction writes English facts from them anyway
-		const english = await toEnglish(summary, 12_000);
+		// server's memory extraction writes English facts from them anyway.
+		// 8s: this runs while the agent waits to end its turn (a fast model needs 2-5s); on timeout the original text is stored
+		const english = await toEnglish(summary, 8000);
 		await save(ctx, 'session_summary', `[Agent: ${agentLabel}] Session Summary for ${project.projectName}:\n${english}`);
 	}
 }
@@ -538,7 +600,7 @@ async function handleCompact(ctx: HookContext) {
 		payload.summary ||
 			(payload.transcript_path ? trimCompactSummary(lastTranscriptText(payload.transcript_path, (e) => e.isCompactSummary)) : ''),
 	);
-	if (summary.length > 10) {
+	if (summary.length > 10 && firstTime(ctx.sessionId, 'compact', summary)) {
 		await save(
 			ctx,
 			'session_summary',

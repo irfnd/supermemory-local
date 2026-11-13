@@ -3,7 +3,16 @@ import { expect, test } from 'bun:test';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { isEnglish, lastTranscriptText, newSince, pickHits, stripContext, trimCompactSummary } from './hook-handler.ts';
+import {
+	firstTime,
+	isEnglish,
+	lastAgyReply,
+	lastTranscriptText,
+	newSince,
+	pickHits,
+	stripContext,
+	trimCompactSummary,
+} from './hook-handler.ts';
 import { fixEmbeddingResponse, rewriteBody } from './llm-proxy.ts';
 import { cleanText } from './zed-adapter.ts';
 
@@ -94,4 +103,28 @@ test('isEnglish tells English prose from other languages', () => {
 	expect(isEnglish('kenapa token refresh cepat kedaluwarsa?')).toBe(false);
 	expect(isEnglish('为什么刷新令牌很快过期')).toBe(false);
 	expect(isEnglish('fix login bug')).toBe(true);
+});
+
+test('lastAgyReply picks the last PLANNER_RESPONSE with text, skipping tool-call steps', () => {
+	const file = path.join(os.tmpdir(), `agy-transcript-${process.pid}.jsonl`);
+	const rows = [
+		{ type: 'PLANNER_RESPONSE', content: 'first reply' },
+		{ type: 'PLANNER_RESPONSE', tool_calls: [{ name: 'write_file' }] },
+		{ type: 'GENERIC', status: 'ERROR', content: 'tool call denied' },
+		{ type: 'PLANNER_RESPONSE', content: 'final reply' },
+		{ type: 'PLANNER_RESPONSE', tool_calls: [] },
+	];
+	fs.writeFileSync(file, rows.map((r) => JSON.stringify(r)).join('\n'));
+	expect(lastAgyReply(file)).toBe('final reply');
+	fs.unlinkSync(file);
+	expect(lastAgyReply(file)).toBe('');
+});
+
+test('firstTime lets only the first of several identical stores through', () => {
+	const id = `dedupe-${process.pid}-${Date.now()}`;
+	expect(firstTime(id, 'stop', 'same summary')).toBe(true);
+	expect(firstTime(id, 'stop', 'same summary')).toBe(false);
+	expect(firstTime(id, 'stop', 'another summary')).toBe(true);
+	expect(firstTime(id, 'compact', 'same summary')).toBe(true);
+	expect(firstTime(undefined, 'stop', 'same summary')).toBe(true);
 });
