@@ -27,6 +27,9 @@ LLM_PROXY_PORT="${LLM_PROXY_PORT:-20129}"
 LLM_UPSTREAM="${OPENAI_BASE_URL:-$NINEROUTER_URL}"
 ZED_ADAPTER_PID_FILE="$PROJECT_ROOT/.zed-adapter.pid"
 ZED_ADAPTER_PORT="${ZED_ADAPTER_PORT:-20130}"
+SUPERGATEWAY_PID_FILE="$PROJECT_ROOT/.supergateway.pid"
+# Same port as "port" in mcp-config.json
+MCP_GATEWAY_PORT="${MCP_GATEWAY_PORT:-20131}"
 LOG_FILE="$DATA_DIR/supermemory.log"
 
 mkdir -p "$DATA_DIR"
@@ -95,6 +98,29 @@ else
     sleep 0.25
   done
   echo "✓ Started (PID: $(cat "$ZED_ADAPTER_PID_FILE"), log: $DATA_DIR/zed-adapter.log)"
+fi
+
+# 2c. MCP gateway: supergateway serves every server of mcp-config.json on one port (before the supermemory step, which can exit 0 early)
+echo -n "→ Checking MCP gateway on port $MCP_GATEWAY_PORT... "
+if curl -s --connect-timeout 1 "http://127.0.0.1:$MCP_GATEWAY_PORT/healthz" >/dev/null 2>&1; then
+  echo "✓ Running"
+elif ! command -v supergateway >/dev/null 2>&1; then
+  echo "⚠ supergateway not found (brew install supercorp-ai/tap/supergateway), skipped"
+else
+  # GUI/launchd shells may lack these in PATH; the MCP servers in mcp-config.json need bunx/python3/pdfcraft-cli. stdin must not be a closed pipe (it stops the gateway)
+  PATH="$HOME/.bun/bin:/opt/homebrew/bin:$PATH" nohup supergateway --config "$PROJECT_ROOT/mcp-config.json" --port "$MCP_GATEWAY_PORT" \
+    < /dev/null >> "$DATA_DIR/supergateway.log" 2>&1 &
+  echo $! > "$SUPERGATEWAY_PID_FILE"
+  for i in {1..20}; do
+    curl -s --connect-timeout 1 "http://127.0.0.1:$MCP_GATEWAY_PORT/healthz" >/dev/null 2>&1 && break
+    sleep 0.25
+  done
+  if kill -0 "$(cat "$SUPERGATEWAY_PID_FILE")" 2>/dev/null; then
+    echo "✓ Started (PID: $(cat "$SUPERGATEWAY_PID_FILE"), log: $DATA_DIR/supergateway.log)"
+  else
+    echo "⚠ Exited right away, see $DATA_DIR/supergateway.log (check: bun run mcp:check)"
+    rm -f "$SUPERGATEWAY_PID_FILE"
+  fi
 fi
 
 # 3. Check if supermemory-server is already running
@@ -182,6 +208,7 @@ if [ "$is_up" -eq 1 ]; then
   echo "  - AI Model:    $OPENAI_MODEL via llm-proxy :$LLM_PROXY_PORT -> $LLM_UPSTREAM"
   echo "  - Log:         $LOG_FILE"
   echo "  - Zed adapter: http://127.0.0.1:$ZED_ADAPTER_PORT/v1/completions"
+  echo "  - MCP gateway: http://127.0.0.1:$MCP_GATEWAY_PORT/<server>/mcp (mcp-config.json)"
   echo "========================================================"
 else
   echo "⚠ Server started with PID $SM_PID, but endpoint check timed out."

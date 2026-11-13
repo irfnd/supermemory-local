@@ -50,6 +50,19 @@ else
 fi
 echo ""
 
+# MCP gateway (supergateway)
+MCP_GATEWAY_PORT="${MCP_GATEWAY_PORT:-20131}"
+echo "   MCP gateway (supergateway, mcp-config.json):"
+if curl -s --connect-timeout 2 "http://127.0.0.1:$MCP_GATEWAY_PORT/healthz" >/dev/null 2>&1; then
+  SG_PID="$(cat "$PROJECT_ROOT/.supergateway.pid" 2>/dev/null || true)"
+  echo "   ● Gateway: Running on http://127.0.0.1:$MCP_GATEWAY_PORT${SG_PID:+ (PID: $SG_PID)}"
+  supergateway --config "$PROJECT_ROOT/mcp-config.json" --checkConfig 2>&1 | sed -n '2,$p' \
+    | while read -r path name _; do echo "   ● MCP: http://127.0.0.1:$MCP_GATEWAY_PORT$path/mcp ($name)"; done
+else
+  echo "   ○ Gateway: NOT running (expected port $MCP_GATEWAY_PORT)"
+fi
+echo ""
+
 # 2. Supermemory Status
 echo "2. Supermemory Status:"
 IS_RUNNING=0

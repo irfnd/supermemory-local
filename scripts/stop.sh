@@ -45,6 +45,18 @@ if [ -f "$ZED_ADAPTER_PID_FILE" ]; then
   rm -f "$ZED_ADAPTER_PID_FILE"
 fi
 
+# supergateway stops its MCP child servers on SIGTERM; its docs ask for >5s of grace
+SUPERGATEWAY_PID_FILE="$PROJECT_ROOT/.supergateway.pid"
+if [ -f "$SUPERGATEWAY_PID_FILE" ]; then
+  PID="$(cat "$SUPERGATEWAY_PID_FILE")"
+  if kill "$PID" 2>/dev/null; then
+    for i in {1..24}; do kill -0 "$PID" 2>/dev/null || break; sleep 0.25; done
+    kill -0 "$PID" 2>/dev/null && kill -9 "$PID" 2>/dev/null
+    echo "✓ supergateway stopped."
+  fi
+  rm -f "$SUPERGATEWAY_PID_FILE"
+fi
+
 if [[ "${1:-}" == "--all" ]]; then
   if pgrep -f "9router" >/dev/null 2>&1; then
     echo "Stopping 9router..."

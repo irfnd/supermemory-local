@@ -42,6 +42,7 @@ Memori diisolasi dan disimpan secara terpisah **berdasarkan folder / base reposi
 supermemory-local/
 ├── .env                     # Konfigurasi port, model embedding & LLM 9router, data dir, direct workflow
 ├── .env.example             # Template konfigurasi
+├── mcp-config.json          # Semua server MCP (format mcpServers) yang dijalankan supergateway
 ├── package.json             # Scripts bun (runtime tanpa dependensi; devDependencies hanya types, tsc & prettier)
 ├── tsconfig.json            # Konfigurasi TypeScript (bun run typecheck)
 ├── prettier.config.ts       # Format kode (extends @irfnd/prettier-config), bun run format
@@ -52,10 +53,11 @@ supermemory-local/
 │   ├── current -> stores/…  # Symlink ke store aktif (dibuat start.sh)
 │   ├── supermemory.log      # Log runtime server
 │   ├── llm-proxy.log        # Log proxy LLM (status & durasi per request)
-│   └── zed-adapter.log      # Log adapter Zed
+│   ├── zed-adapter.log      # Log adapter Zed
+│   └── supergateway.log     # Log gateway MCP
 ├── scripts/
-│   ├── start.sh             # Menjalankan 9router + llm-proxy + zed-adapter + supermemory-server (store sesuai model embedding)
-│   ├── stop.sh              # Menghentikan supermemory-server + llm-proxy + zed-adapter (--all: juga 9router)
+│   ├── start.sh             # Menjalankan 9router + llm-proxy + zed-adapter + supergateway + supermemory-server (store sesuai model embedding)
+│   ├── stop.sh              # Menghentikan supermemory-server + llm-proxy + zed-adapter + supergateway (--all: juga 9router)
 │   └── status.sh            # Cek status kesehatan, port, model, store aktif & daftar store
 └── src/
     ├── hook-handler.ts      # Handler lifecycle (start, change, stop)
@@ -87,7 +89,7 @@ WORKFLOW_ENGINE=direct
 SUPERMEMORY_EMBEDDING_PROVIDER=local
 SUPERMEMORY_EMBEDDING_MODEL=Xenova/bge-base-en-v1.5
 SUPERMEMORY_EMBEDDING_DIMENSIONS=768
-TRANSLATE_MODEL=ag/gemini-3.8-flash-low   # model chat 9router untuk menerjemahkan ke bahasa Inggris; kosong = mati
+TRANSLATE_MODEL=ollama/gpt-oss:120b   # model chat 9router untuk menerjemahkan ke bahasa Inggris (jalan di dalam hook, harus menjawab dalam hitungan detik); kosong = mati
 
 # 9router Gateway (Local OpenAI-compatible API)
 OPENAI_BASE_URL=http://127.0.0.1:20128/v1
@@ -119,7 +121,7 @@ ZED_ADAPTER_REASONING_EFFORT=none
 Butuh [Bun](https://bun.sh) (`curl -fsSL https://bun.sh/install | bash`). Pasang devDependencies sekali (`bun install`), lalu gunakan script bun atau bash langsung:
 
 ```bash
-# Jalankan 9router (jika belum), llm-proxy, zed-adapter & Supermemory Server di background:
+# Jalankan 9router (jika belum), llm-proxy, zed-adapter, supergateway & Supermemory Server di background:
 bun run start
 # atau: ./scripts/start.sh (tambahkan --foreground untuk server di foreground)
 ```
@@ -194,19 +196,20 @@ bun run uninstall-hooks
 
 ### B. Antigravity (`~/.gemini/config/hooks.json`)
 
-- **`PreInvocation`**: Mengeksekusi `supermemory-hook.ts antigravity start`. Mengembalikan objek JSON `{ "injectSteps": [{ "ephemeralMessage": "<supermemory-context>..." }] }` sehingga memori project otomatis disuntikkan sebelum model memproses instruksi.
-- **`PostToolUse`** (matcher `write_to_file|replace_file_content|run_command`): Mencatat eksekusi tool ke Supermemory dan mengembalikan `{}`. Command read-only (`ls`, `cat`, `git status`, dll.) diabaikan agar memori tidak penuh noise.
-- **`Stop`**: Menyimpan checkpoint ringkasan sesi.
+- **`PreInvocation`** (jalan sebelum setiap panggilan model, jadi hasilnya di-cache 30 detik per percakapan): Mengeksekusi `supermemory-hook.ts antigravity start`. Mengembalikan objek JSON `{ "injectSteps": [{ "ephemeralMessage": "<supermemory-context>..." }] }` sehingga memori project otomatis disuntikkan sebelum model memproses instruksi.
+- **`PostToolUse`** (matcher `write_to_file|write_file|replace_file_content|multi_replace_file_content|edit_file|run_command`; nama tool Antigravity berbeda antar versi model, `write_file`/`edit_file` memakai argumen `Path`): Mencatat eksekusi tool ke Supermemory dan mengembalikan `{}`. Command read-only (`ls`, `cat`, `git status`, dll.) diabaikan agar memori tidak penuh noise.
+- **`Stop`**: Menyimpan checkpoint ringkasan sesi. Payload `Stop` tidak membawa teks balasan, jadi balasan terakhir dibaca dari `transcriptPath` (entri `PLANNER_RESPONSE`).
 - Antigravity tidak punya hook compaction (hanya `PreInvocation`, `PostInvocation`, `PreToolUse`, `PostToolUse`, `SessionStart`), jadi ringkasan compaction-nya tidak bisa ditangkap. `Stop` tetap menyimpan balasan terakhir di setiap giliran.
 
 ### C. OpenCode (`~/.config/opencode/plugins/supermemory-local.ts`)
 
 - Plugin di-generate dari `src/opencode-plugin.ts` dan otomatis ter-load dari folder plugins global (tidak perlu, dan jangan, didaftarkan di `opencode.json` karena akan ter-load dua kali).
-- Menggunakan hook event lifecycle OpenCode:
-  - `experimental.chat.system.transform`: Menginjeksi memori project ke dalam `system prompt` agent (`start` sekali per sesi, lalu `sync` di setiap turn untuk menambahkan memori baru dari agent/sesi lain).
-  - `tool.execute.after`: Mencatat tool execution ke memori (tool read-only seperti `read`, `grep`, `glob` diabaikan).
-  - `event (session.idle)`: Menyimpan ringkasan respons akhir asisten.
-  - `event (session.compacted)`: Menyimpan pesan ringkasan compaction (assistant message ber-flag `summary`) lewat action `compact`.
+- `opencode` di mesin ini adalah **OpenCode 2.x**. Hook v1 (`tool.execute.after`, `experimental.chat.system.transform`, `event`) tidak pernah dipanggil, jadi plugin memakai API v2 (`export default { id, setup(ctx) }`, dokumentasi: opencode.ai/v2/docs/build/plugins/):
+  - `ctx.session.hook('context')`: Menginjeksi memori project ke `event.system` sebelum setiap panggilan model (`start` sekali per sesi, lalu `sync` paling sering tiap 30 detik untuk memori baru dari agent/sesi lain).
+  - `ctx.tool.hook('execute.after')`: Mencatat tool execution ke memori (tool read-only seperti `read`, `grep`, `glob` diabaikan). Tidak ditunggu, supaya tool tidak tertahan.
+  - `session.execution.succeeded` (+ teks terakhir dari `session.text.ended`): Menyimpan ringkasan respons akhir asisten. v2 tidak punya event idle.
+  - `session.compaction.ended`: Menyimpan ringkasan compaction lewat action `compact`. Isi event ini belum terdokumentasi, jadi bagian ini belum terverifikasi.
+- Instance plugin lama bertahan di service latar belakang setelah plugin diubah dan masing-masing ikut menangani event yang sama (hook sudah men-dedupe ringkasan per sesi). Jalankan `opencode service restart` setelah mengubah plugin untuk membersihkannya.
 
 ---
 
@@ -228,6 +231,18 @@ Adapter mengirim `reasoning_effort` dari `ZED_ADAPTER_REASONING_EFFORT` (default
 ```
 
 > Pakai model tanpa thinking berat. `ag/gemini-3.8-flash-low` sekitar 3 detik per prediksi; varian `*-high` (mis. combo `pecut-ai`) 22–34 detik.
+
+---
+
+## 🔌 Gateway MCP (supergateway)
+
+Satu pintu untuk semua server MCP, menggantikan `mcpm`. [supergateway](https://github.com/supercorp-ai/supergateway) (`brew install supercorp-ai/tap/supergateway`) membaca `mcp-config.json` (format `mcpServers`, boleh komentar) dan melayani tiap server di `http://127.0.0.1:20131/<nama>/mcp` (Streamable HTTP, stateful: satu proses per sesi klien, jadi state browser Playwright tetap hidup selama sesi). `bun run start/status/stop` ikut menjalankan, menampilkan, dan menghentikannya (PID `.supergateway.pid`, log `data/supergateway.log`).
+
+- Tambah/ubah server: edit `mcp-config.json`, cek dengan `bun run mcp:check`, lalu `bun run stop && bun run start` (server dimulai ulang agar config terbaca).
+- Rahasia (`CONTEXT7_API_KEY`) ditulis sebagai `${VAR}` di config dan diisi dari `.env`; variabel yang kosong/tidak ada membuat gateway gagal start.
+- Port: `port` di `mcp-config.json` dan `MCP_GATEWAY_PORT` di `.env` harus sama (default `20131`).
+- Klien menunjuk ke URL gateway: Claude Code `claude mcp add --transport http -s user <nama> http://127.0.0.1:20131/<nama>/mcp`; Antigravity (`~/.gemini/config/mcp_config.json`) `{"serverUrl": "..."}`; OpenCode v2 (`opencode.json`) `"mcp": {"servers": {"<nama>": {"type": "remote", "url": "..."}}}`.
+- Gateway tidak aktif = semua alat MCP di agent gagal tersambung, jadi jalankan `bun run start` dulu.
 
 ---
 
@@ -322,5 +337,6 @@ for (const d of await c.listDocuments({ containerTags: [tag], limit: 100 }))
 - Log server supermemory: `./data/supermemory.log`
 - Log proxy LLM (status & durasi tiap request ke 9router): `./data/llm-proxy.log`
 - Log adapter Zed (model, status & durasi tiap prediksi): `./data/zed-adapter.log`
+- Log gateway MCP (supergateway): `./data/supergateway.log`
 - Log aktivitas hook: `~/.supermemory-hook.log`
 - Log gateway 9router: `~/.9router/logs/server.log`
