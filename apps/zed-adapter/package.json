@@ -1,0 +1,13 @@
+{
+	"name": "@supermemory-local/zed-adapter",
+	"version": "1.0.0",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"start": "bun src/main.ts",
+		"typecheck": "tsc --noEmit"
+	},
+	"dependencies": {
+		"@supermemory-local/shared": "workspace:*"
+	}
+}

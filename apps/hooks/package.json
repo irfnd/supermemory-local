@@ -1,0 +1,16 @@
+{
+	"name": "@supermemory-local/hooks",
+	"version": "1.0.0",
+	"private": true,
+	"type": "module",
+	"exports": {
+		"./*": "./src/*.ts"
+	},
+	"scripts": {
+		"typecheck": "tsc --noEmit"
+	},
+	"dependencies": {
+		"@supermemory-local/shared": "workspace:*",
+		"@supermemory-local/client": "workspace:*"
+	}
+}

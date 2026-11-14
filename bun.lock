@@ -12,6 +12,51 @@
         "typescript": "^7.0.2",
       },
     },
+    "apps/9router": {
+      "name": "@supermemory-local/9router",
+      "version": "1.0.0",
+    },
+    "apps/hooks": {
+      "name": "@supermemory-local/hooks",
+      "version": "1.0.0",
+      "dependencies": {
+        "@supermemory-local/client": "workspace:*",
+        "@supermemory-local/shared": "workspace:*",
+      },
+    },
+    "apps/llm-proxy": {
+      "name": "@supermemory-local/llm-proxy",
+      "version": "1.0.0",
+      "dependencies": {
+        "@supermemory-local/shared": "workspace:*",
+      },
+    },
+    "apps/supermemory-server": {
+      "name": "@supermemory-local/supermemory-server",
+      "version": "1.0.0",
+    },
+    "apps/zed-adapter": {
+      "name": "@supermemory-local/zed-adapter",
+      "version": "1.0.0",
+      "dependencies": {
+        "@supermemory-local/shared": "workspace:*",
+      },
+    },
+    "packages/client": {
+      "name": "@supermemory-local/client",
+      "version": "1.0.0",
+      "dependencies": {
+        "@supermemory-local/shared": "workspace:*",
+      },
+    },
+    "packages/shared": {
+      "name": "@supermemory-local/shared",
+      "version": "1.0.0",
+      "dependencies": {
+        "reflect-metadata": "^0.2.2",
+        "tsyringe": "^4.10.0",
+      },
+    },
   },
   "packages": {
     "@ai-sdk/provider": ["@ai-sdk/provider@3.0.8", "", { "dependencies": { "json-schema": "^0.4.0" } }, "sha512-oGMAgGoQdBXbZqNG0Ze56CHjDZ1IDYOwGYxYjO5KLSlz5HiNQ9udIXsPZ61VWaHGZ5XW/jyjmr6t2xz2jGVwbQ=="],
@@ -35,6 +80,20 @@
     "@opencode-ai/sdk": ["@opencode-ai/sdk@1.18.33", "", { "dependencies": { "cross-spawn": "7.0.6" } }, "sha512-Nyurky9+AA2tvZ6my8UtO5pxPoXxrNypqjeEqMshBGiR542glOy+KE1Y+3lwWU+Z6HC/hSmrdXNbX81+qiuTzg=="],
 
     "@standard-schema/spec": ["@standard-schema/spec@1.1.0", "", {}, "sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w=="],
+
+    "@supermemory-local/9router": ["@supermemory-local/9router@workspace:apps/9router"],
+
+    "@supermemory-local/client": ["@supermemory-local/client@workspace:packages/client"],
+
+    "@supermemory-local/hooks": ["@supermemory-local/hooks@workspace:apps/hooks"],
+
+    "@supermemory-local/llm-proxy": ["@supermemory-local/llm-proxy@workspace:apps/llm-proxy"],
+
+    "@supermemory-local/shared": ["@supermemory-local/shared@workspace:packages/shared"],
+
+    "@supermemory-local/supermemory-server": ["@supermemory-local/supermemory-server@workspace:apps/supermemory-server"],
+
+    "@supermemory-local/zed-adapter": ["@supermemory-local/zed-adapter@workspace:apps/zed-adapter"],
 
     "@types/bun": ["@types/bun@1.4.2", "", { "dependencies": { "bun-types": "1.4.2" } }, "sha512-GimotNn7+ZV0uVArItBbriZsR1oNf0+WTzPkdcFrzShI7k2norL0uzEaJT8T33dWr7O/c9ZDuAFQrctKCi72oQ=="],
 
@@ -116,11 +175,17 @@
 
     "pure-rand": ["pure-rand@8.4.2", "", {}, "sha512-vvuOGgcuPJAirlHvuQw1TrOiw7ptaIXXmIbNuiNOY6lNGJJH49PQ1Kj4nd783nPdQhQdicgOjVI2yI/9BD6/Ng=="],
 
+    "reflect-metadata": ["reflect-metadata@0.2.2", "", {}, "sha512-urBwgfrvVP/eAyXx4hluJivBKzuEbSQs9rKWCrCkbSxNv8mxPcUZKeuoF3Uy4mJl3Lwprp6yy5/39VWigZ4K6Q=="],
+
     "shebang-command": ["shebang-command@2.0.0", "", { "dependencies": { "shebang-regex": "^3.0.0" } }, "sha512-kHxr2zZpYtdmrN1qDjrrX/Z1rR1kG8Dx+gkpK1G4eXmvXswmcE1hTWBWYUzlraYw1/yZp6YuDY77YtvbN0dmDA=="],
 
     "shebang-regex": ["shebang-regex@3.0.0", "", {}, "sha512-7++dFhtcx3353uBaq8DDR4NuxBetBzC7ZQOhmTQInHEd6bSrXdiEyzCvG07Z44UYdLShWUyXt5M/yhz8ekcb1A=="],
 
     "toml": ["toml@4.3.0", "", {}, "sha512-lVb8X9BsPVuH0M4BKeS91tXAmJvCjQ5UIyAbQFaxkKGyUFK2RPkhwaFSQH8vbpl1d23eu/IBH+dwVMHWaq9A5A=="],
+
+    "tslib": ["tslib@1.14.1", "", {}, "sha512-Xni35NKzjgMrwevysHTCArtLDpPvye8zV/0E4EyYn43P7/7qvQwPh9BGkHewbMulVntbigmcT7rdX3BNo9wRJg=="],
+
+    "tsyringe": ["tsyringe@4.10.0", "", { "dependencies": { "tslib": "^1.9.3" } }, "sha512-axr3IdNuVIxnaK5XGEUFTu3YmAQ6lllgrvqfEoR16g/HGnYY/6We4oWENtAnzK6/LpJ2ur9PAb80RBt7/U4ugw=="],
 
     "typescript": ["typescript@7.0.2", "", { "optionalDependencies": { "@typescript/typescript-aix-ppc64": "7.0.2", "@typescript/typescript-darwin-arm64": "7.0.2", "@typescript/typescript-darwin-x64": "7.0.2", "@typescript/typescript-freebsd-arm64": "7.0.2", "@typescript/typescript-freebsd-x64": "7.0.2", "@typescript/typescript-linux-arm": "7.0.2", "@typescript/typescript-linux-arm64": "7.0.2", "@typescript/typescript-linux-loong64": "7.0.2", "@typescript/typescript-linux-mips64el": "7.0.2", "@typescript/typescript-linux-ppc64": "7.0.2", "@typescript/typescript-linux-riscv64": "7.0.2", "@typescript/typescript-linux-s390x": "7.0.2", "@typescript/typescript-linux-x64": "7.0.2", "@typescript/typescript-netbsd-arm64": "7.0.2", "@typescript/typescript-netbsd-x64": "7.0.2", "@typescript/typescript-openbsd-arm64": "7.0.2", "@typescript/typescript-openbsd-x64": "7.0.2", "@typescript/typescript-sunos-x64": "7.0.2", "@typescript/typescript-win32-arm64": "7.0.2", "@typescript/typescript-win32-x64": "7.0.2" }, "bin": { "tsc": "bin/tsc" } }, "sha512-8FYau96o3NKOhbjKi/qNvG/W5jhzxkbdm5sj9AbZ/5T5sWqn3hJgLfGx27sRKZWTvyzCP8dLRBTf5tBTSRVUNA=="],
 

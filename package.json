@@ -3,7 +3,7 @@
 	"version": "1.0.0",
 	"author": "Irfnd <irfandiabimanyu@gmail.com>",
 	"license": "MIT",
-	"description": "Fully-local Supermemory instance connected to 9router with CLI hooks for Claude Code, Antigravity, and OpenCode",
+	"description": "Self-hosted Supermemory with 9router, run by docker compose, plus hooks for Claude Code, Antigravity and OpenCode",
 	"type": "module",
 	"private": true,
 	"bin": {
@@ -11,14 +11,17 @@
 	},
 	"scripts": {
 		"start": "bash scripts/start.sh",
+		"start:mcp": "bash scripts/start.sh --mcp-only",
 		"stop": "bash scripts/stop.sh",
+		"stop:mcp": "bash scripts/stop.sh --mcp-only",
 		"status": "bash scripts/status.sh",
+		"logs": "docker compose -f docker-compose.yml -f docker-compose.local.yml logs -f",
 		"mcp:check": "bash -c 'set -a; source .env; set +a; supergateway --config mcp-config.json --checkConfig'",
-		"install-hooks": "bun src/installer.ts install",
-		"uninstall-hooks": "bun src/installer.ts uninstall",
-		"test-memory": "bun src/test-memory.ts",
+		"install-hooks": "bun apps/hooks/src/installer/main.ts install",
+		"uninstall-hooks": "bun apps/hooks/src/installer/main.ts uninstall",
+		"test-memory": "bun apps/hooks/src/self-test/main.ts",
 		"test": "bun test",
-		"typecheck": "tsc --noEmit",
+		"typecheck": "bun run --filter '@supermemory-local/*' typecheck",
 		"format": "bun --bun prettier --write .",
 		"format:check": "bun --bun prettier --check ."
 	},
@@ -37,5 +40,9 @@
 		"@types/bun": "^1.4.2",
 		"prettier": "^3.9.9",
 		"typescript": "^7.0.2"
-	}
+	},
+	"workspaces": [
+		"apps/*",
+		"packages/*"
+	]
 }

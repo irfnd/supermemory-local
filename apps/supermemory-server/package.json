@@ -1,0 +1,6 @@
+{
+	"name": "@supermemory-local/supermemory-server",
+	"version": "1.0.0",
+	"private": true,
+	"description": "supermemory-server release binary image (Dockerfile only)"
+}
