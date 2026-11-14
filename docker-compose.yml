@@ -1,0 +1,55 @@
+name: supermemory
+
+services:
+  9router:
+    build: { context: ., dockerfile: apps/9router/Dockerfile, args: { NINEROUTER_VERSION: '${NINEROUTER_VERSION:-0.5.116}' } }
+    restart: unless-stopped
+    environment:
+      DATA_DIR: /app/data
+      INITIAL_PASSWORD: ${NINEROUTER_PASSWORD:?set NINEROUTER_PASSWORD}
+      REQUIRE_API_KEY: ${NINEROUTER_REQUIRE_API_KEY:-false}
+    volumes: ['${NINEROUTER_DATA:-ninerouter-data}:/app/data']
+    expose: ['20128']
+
+  llm-proxy:
+    build: { context: ., dockerfile: apps/llm-proxy/Dockerfile }
+    restart: unless-stopped
+    environment:
+      OPENAI_BASE_URL: http://9router:20128/v1
+      LLM_PROXY_PORT: '20129'
+      SUPERMEMORY_EMBEDDING_DIMENSIONS: ${SUPERMEMORY_EMBEDDING_DIMENSIONS:-768}
+    expose: ['20129']
+    depends_on:
+      9router: { condition: service_healthy }
+
+  zed-adapter:
+    build: { context: ., dockerfile: apps/zed-adapter/Dockerfile }
+    restart: unless-stopped
+    environment:
+      OPENAI_BASE_URL: http://9router:20128/v1
+      OPENAI_API_KEY: ${OPENAI_API_KEY:?set OPENAI_API_KEY}
+      ZED_ADAPTER_PORT: '20130'
+      ZED_ADAPTER_TOKEN: ${ZED_ADAPTER_TOKEN:-}
+      ZED_ADAPTER_REASONING_EFFORT: ${ZED_ADAPTER_REASONING_EFFORT:-none}
+    expose: ['20130']
+    depends_on:
+      9router: { condition: service_healthy }
+
+  supermemory:
+    build: { context: ., dockerfile: apps/supermemory-server/Dockerfile }
+    restart: unless-stopped
+    environment:
+      SUPERMEMORY_EMBEDDING_PROVIDER: ${SUPERMEMORY_EMBEDDING_PROVIDER:-local}
+      SUPERMEMORY_EMBEDDING_MODEL: ${SUPERMEMORY_EMBEDDING_MODEL:-Xenova/bge-base-en-v1.5}
+      SUPERMEMORY_EMBEDDING_DIMENSIONS: ${SUPERMEMORY_EMBEDDING_DIMENSIONS:-768}
+      OPENAI_BASE_URL: http://llm-proxy:20129
+      OPENAI_API_KEY: ${OPENAI_API_KEY:?set OPENAI_API_KEY}
+      OPENAI_MODEL: ${OPENAI_MODEL:-cc/claude-haiku-4-5-20251001}
+    volumes: ['${SUPERMEMORY_DATA:-supermemory-data}:/data']
+    expose: ['6767']
+    depends_on:
+      llm-proxy: { condition: service_healthy }
+
+volumes:
+  supermemory-data:
+  ninerouter-data:

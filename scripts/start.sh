@@ -1,216 +1,50 @@
 #!/usr/bin/env bash
-# ========================================================
-# Start Supermemory Local Server with 9router
-# ========================================================
 set -euo pipefail
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+MCP_ONLY=0
+[[ "${1:-}" == "--mcp-only" ]] && MCP_ONLY=1
 
-cd "$PROJECT_ROOT"
-
-# Load .env
-if [ -f "$PROJECT_ROOT/.env" ]; then
-  set -a
-  source "$PROJECT_ROOT/.env"
-  set +a
-fi
-
-NINEROUTER_PORT="${NINEROUTER_PORT:-20128}"
-NINEROUTER_URL="http://127.0.0.1:${NINEROUTER_PORT}/v1"
-SM_PORT="${PORT:-6767}"
-DATA_DIR="${SUPERMEMORY_DATA_DIR:-./data}"
-[[ "$DATA_DIR" = /* ]] || DATA_DIR="$PROJECT_ROOT/${DATA_DIR#./}"
-PID_FILE="$PROJECT_ROOT/.supermemory.pid"
-PROXY_PID_FILE="$PROJECT_ROOT/.llm-proxy.pid"
-LLM_PROXY_PORT="${LLM_PROXY_PORT:-20129}"
-LLM_UPSTREAM="${OPENAI_BASE_URL:-$NINEROUTER_URL}"
-ZED_ADAPTER_PID_FILE="$PROJECT_ROOT/.zed-adapter.pid"
-ZED_ADAPTER_PORT="${ZED_ADAPTER_PORT:-20130}"
-SUPERGATEWAY_PID_FILE="$PROJECT_ROOT/.supergateway.pid"
-# Same port as "port" in mcp-config.json
-MCP_GATEWAY_PORT="${MCP_GATEWAY_PORT:-20131}"
-LOG_FILE="$DATA_DIR/supermemory.log"
-
-mkdir -p "$DATA_DIR"
+[ -f .env ] || { echo "❌ .env not found (cp .env.example .env)"; exit 1; }
 
 echo "========================================================"
-echo " Starting Supermemory Local with 9router"
+echo " Starting Supermemory Local (docker compose + MCP gateway)"
 echo "========================================================"
 
-# 1. Check or start 9router
-echo -n "→ Checking 9router at $NINEROUTER_URL... "
-if curl -s --connect-timeout 2 "$NINEROUTER_URL/models" >/dev/null 2>&1; then
-  echo "✓ Running"
-else
-  echo "Not running."
-  if command -v 9router >/dev/null 2>&1; then
-    echo "→ Starting 9router in background..."
-    mkdir -p "$HOME/.9router/logs"
-    # Launch in background with tray/no-browser mode
-    nohup 9router -n --port "$NINEROUTER_PORT" > "$HOME/.9router/logs/server.log" 2>&1 &
-
-    # Wait for 9router to start
-    ready=0
-    for i in {1..20}; do
-      if curl -s --connect-timeout 1 "$NINEROUTER_URL/models" >/dev/null 2>&1; then
-        ready=1
-        break
-      fi
-      sleep 0.5
-    done
-
-    if [ "$ready" -eq 1 ]; then
-      echo "✓ 9router started successfully"
-    else
-      echo "⚠ Warning: 9router did not respond within 10s. Check ~/.9router/logs/server.log"
-    fi
-  else
-    echo "⚠ 9router command not found in PATH! Make sure 9router is installed and on PATH."
-  fi
+if [ "$MCP_ONLY" -eq 0 ]; then
+  docker info >/dev/null 2>&1 || { echo "❌ Docker is not running"; exit 1; }
+  echo "→ docker compose up (9router, llm-proxy, zed-adapter, supermemory)..."
+  compose up -d --build --wait --wait-timeout 300
 fi
 
-# 2. LLM proxy (forces "stream": false; 9router answers SSE otherwise and supermemory can't parse it)
-echo -n "→ Checking LLM proxy on port $LLM_PROXY_PORT... "
-if curl -s --connect-timeout 1 "http://127.0.0.1:$LLM_PROXY_PORT/models" >/dev/null 2>&1; then
-  echo "✓ Running"
-else
-  OPENAI_BASE_URL="$LLM_UPSTREAM" LLM_PROXY_PORT="$LLM_PROXY_PORT" SUPERMEMORY_EMBEDDING_DIMENSIONS="${SUPERMEMORY_EMBEDDING_DIMENSIONS:-768}" \
-    nohup bun "$PROJECT_ROOT/src/llm-proxy.ts" >> "$DATA_DIR/llm-proxy.log" 2>&1 &
-  echo $! > "$PROXY_PID_FILE"
-  for i in {1..20}; do
-    curl -s --connect-timeout 1 "http://127.0.0.1:$LLM_PROXY_PORT/models" >/dev/null 2>&1 && break
-    sleep 0.25
-  done
-  echo "✓ Started (PID: $(cat "$PROXY_PID_FILE"), log: $DATA_DIR/llm-proxy.log)"
-fi
-
-# 2b. Zed edit-prediction adapter (/v1/completions -> 9router /chat/completions, key from .env)
-echo -n "→ Checking Zed adapter on port $ZED_ADAPTER_PORT... "
-if curl -s --connect-timeout 1 "http://127.0.0.1:$ZED_ADAPTER_PORT/v1/completions" >/dev/null 2>&1; then
-  echo "✓ Running"
-else
-  OPENAI_BASE_URL="$LLM_UPSTREAM" ZED_ADAPTER_PORT="$ZED_ADAPTER_PORT" \
-    nohup bun "$PROJECT_ROOT/src/zed-adapter.ts" >> "$DATA_DIR/zed-adapter.log" 2>&1 &
-  echo $! > "$ZED_ADAPTER_PID_FILE"
-  for i in {1..20}; do
-    curl -s --connect-timeout 1 "http://127.0.0.1:$ZED_ADAPTER_PORT/v1/completions" >/dev/null 2>&1 && break
-    sleep 0.25
-  done
-  echo "✓ Started (PID: $(cat "$ZED_ADAPTER_PID_FILE"), log: $DATA_DIR/zed-adapter.log)"
-fi
-
-# 2c. MCP gateway: supergateway serves every server of mcp-config.json on one port (before the supermemory step, which can exit 0 early)
-echo -n "→ Checking MCP gateway on port $MCP_GATEWAY_PORT... "
-if curl -s --connect-timeout 1 "http://127.0.0.1:$MCP_GATEWAY_PORT/healthz" >/dev/null 2>&1; then
+echo -n "→ MCP gateway on port $MCP_GATEWAY_PORT... "
+if gateway_up; then
   echo "✓ Running"
 elif ! command -v supergateway >/dev/null 2>&1; then
   echo "⚠ supergateway not found (brew install supercorp-ai/tap/supergateway), skipped"
 else
-  # GUI/launchd shells may lack these in PATH; the MCP servers in mcp-config.json need bunx/python3/pdfcraft-cli. stdin must not be a closed pipe (it stops the gateway)
+  mkdir -p data
+  # stdin must not be a closed pipe (it stops the gateway); PATH needs bunx/python3/pdfcraft-cli
   PATH="$HOME/.bun/bin:/opt/homebrew/bin:$PATH" nohup supergateway --config "$PROJECT_ROOT/mcp-config.json" --port "$MCP_GATEWAY_PORT" \
-    < /dev/null >> "$DATA_DIR/supergateway.log" 2>&1 &
+    < /dev/null >> "$GATEWAY_LOG" 2>&1 &
   echo $! > "$SUPERGATEWAY_PID_FILE"
-  for i in {1..20}; do
-    curl -s --connect-timeout 1 "http://127.0.0.1:$MCP_GATEWAY_PORT/healthz" >/dev/null 2>&1 && break
-    sleep 0.25
-  done
+  for _ in {1..20}; do gateway_up && break; sleep 0.25; done
   if kill -0 "$(cat "$SUPERGATEWAY_PID_FILE")" 2>/dev/null; then
-    echo "✓ Started (PID: $(cat "$SUPERGATEWAY_PID_FILE"), log: $DATA_DIR/supergateway.log)"
+    echo "✓ Started (PID: $(cat "$SUPERGATEWAY_PID_FILE"), log: $GATEWAY_LOG)"
   else
-    echo "⚠ Exited right away, see $DATA_DIR/supergateway.log (check: bun run mcp:check)"
+    echo "⚠ Exited right away, see $GATEWAY_LOG (check: bun run mcp:check)"
     rm -f "$SUPERGATEWAY_PID_FILE"
   fi
 fi
 
-# 3. Check if supermemory-server is already running
-if [ -f "$PID_FILE" ]; then
-  EXISTING_PID="$(cat "$PID_FILE" 2>/dev/null || true)"
-  if [ -n "$EXISTING_PID" ] && kill -0 "$EXISTING_PID" 2>/dev/null; then
-    echo "✓ supermemory-server is already running (PID: $EXISTING_PID) at http://localhost:$SM_PORT"
-    exit 0
-  fi
+echo "========================================================"
+echo "  Supermemory Local is UP"
+if [ "$MCP_ONLY" -eq 0 ]; then
+  echo "  - Supermemory: http://127.0.0.1:6767"
+  echo "  - 9router:     http://127.0.0.1:20128 (dashboard + /v1)"
+  echo "  - LLM proxy:   http://127.0.0.1:20129"
+  echo "  - Zed adapter: http://127.0.0.1:20130/v1/completions"
 fi
-
-# Something else (started outside this script) may already own the port
-if curl -s --connect-timeout 1 "http://localhost:$SM_PORT/v4/search" \
-  -H "Content-Type: application/json" -d '{"q":"ping","limit":1}' >/dev/null 2>&1; then
-  echo "✓ Supermemory already responding on port $SM_PORT (not started by this script, no PID file)"
-  exit 0
-fi
-
-# 4. Locate supermemory-server binary
-SM_BIN=""
-if [ -x "$HOME/.supermemory/bin/supermemory-server" ]; then
-  SM_BIN="$HOME/.supermemory/bin/supermemory-server"
-elif [ -x "$HOME/.local/bin/supermemory-server" ]; then
-  SM_BIN="$HOME/.local/bin/supermemory-server"
-elif command -v supermemory-server >/dev/null 2>&1; then
-  SM_BIN="$(command -v supermemory-server)"
-else
-  echo "❌ supermemory-server binary not found!"
-  echo "Please run: curl -fsSL https://supermemory.ai/install | bash"
-  exit 1
-fi
-
-echo "→ Starting supermemory-server (binary: $SM_BIN)..."
-
-# Ensure non-interactive environment variables are passed
-export SUPERMEMORY_EMBEDDING_PROVIDER="${SUPERMEMORY_EMBEDDING_PROVIDER:-local}"
-export SUPERMEMORY_EMBEDDING_MODEL="${SUPERMEMORY_EMBEDDING_MODEL:-Xenova/bge-base-en-v1.5}"
-export SUPERMEMORY_EMBEDDING_DIMENSIONS="${SUPERMEMORY_EMBEDDING_DIMENSIONS:-768}"
-# One store per embedding model: the server locks a data dir to the model that first embedded into it, so switching
-# SUPERMEMORY_EMBEDDING_MODEL/DIMENSIONS opens (or creates) that model's own store instead of failing on boot.
-# data/current points at the active store; hooks read its api-key.
-STORE_NAME="$(printf '%s-%sd' "$SUPERMEMORY_EMBEDDING_MODEL" "$SUPERMEMORY_EMBEDDING_DIMENSIONS" | tr -c 'A-Za-z0-9._-' '_')"
-STORE_DIR="$DATA_DIR/stores/$STORE_NAME"
-mkdir -p "$STORE_DIR"
-ln -sfn "stores/$STORE_NAME" "$DATA_DIR/current"
-export WORKFLOW_ENGINE="${WORKFLOW_ENGINE:-direct}"
-export PORT="$SM_PORT"
-export SUPERMEMORY_PORT="$SM_PORT"
-export SUPERMEMORY_DATA_DIR="$STORE_DIR"
-export OPENAI_BASE_URL="http://127.0.0.1:$LLM_PROXY_PORT"
-export OPENAI_API_KEY="${OPENAI_API_KEY:?OPENAI_API_KEY is not set (copy .env.example to .env)}"
-export OPENAI_MODEL="${OPENAI_MODEL:-ag/gemini-3.8-flash-low}"
-
-if [[ "${1:-}" == "--foreground" || "${1:-}" == "-f" ]]; then
-  echo "Starting in foreground..."
-  exec "$SM_BIN"
-fi
-
-# Start as daemon
-nohup "$SM_BIN" > "$LOG_FILE" 2>&1 &
-SM_PID=$!
-echo "$SM_PID" > "$PID_FILE"
-
-# Wait for server ready
-echo -n "→ Waiting for supermemory-server to listen on port $SM_PORT... "
-is_up=0
-for i in {1..30}; do
-  if curl -s --connect-timeout 1 "http://localhost:$SM_PORT/v4/search" \
-    -H "Content-Type: application/json" \
-    -d '{"q":"ping","limit":1}' >/dev/null 2>&1; then
-    is_up=1
-    break
-  fi
-  sleep 0.5
-done
-
-if [ "$is_up" -eq 1 ]; then
-  echo "✓ Ready!"
-  echo "========================================================"
-  echo "  Supermemory Local is UP and RUNNING"
-  echo "  - URL:         http://localhost:$SM_PORT"
-  echo "  - PID:         $SM_PID (saved in .supermemory.pid)"
-  echo "  - Data:        $STORE_DIR"
-  echo "  - Embeddings:  $SUPERMEMORY_EMBEDDING_MODEL ($SUPERMEMORY_EMBEDDING_PROVIDER, ${SUPERMEMORY_EMBEDDING_DIMENSIONS}d)"
-  echo "  - AI Model:    $OPENAI_MODEL via llm-proxy :$LLM_PROXY_PORT -> $LLM_UPSTREAM"
-  echo "  - Log:         $LOG_FILE"
-  echo "  - Zed adapter: http://127.0.0.1:$ZED_ADAPTER_PORT/v1/completions"
-  echo "  - MCP gateway: http://127.0.0.1:$MCP_GATEWAY_PORT/<server>/mcp (mcp-config.json)"
-  echo "========================================================"
-else
-  echo "⚠ Server started with PID $SM_PID, but endpoint check timed out."
-  echo "Check log file: $LOG_FILE"
-fi
+echo "  - MCP gateway: http://127.0.0.1:$MCP_GATEWAY_PORT/<server>/mcp (mcp-config.json)"
+echo "  - Logs:        bun run logs | $GATEWAY_LOG"
+echo "========================================================"

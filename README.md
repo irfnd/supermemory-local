@@ -1,38 +1,35 @@
-# Supermemory Local + 9router Integration
+# Supermemory Local + 9router (Docker Compose)
 
-Project untuk menjalankan server **Supermemory** ([supermemory.ai](https://supermemory.ai/docs/self-hosting/overview)) secara lokal, dengan model embedding dan LLM dari **9router** (terinstall global), ditulis dalam TypeScript dan dijalankan langsung dengan **Bun** (tanpa build), dilengkapi sistem hooks otomatis untuk:
+Memori persisten untuk agent coding. Server **Supermemory** ([supermemory.ai](https://supermemory.ai/docs/self-hosting/overview)), gateway LLM **9router**, dan dua relay kecil berjalan sebagai **container lewat Docker Compose**, di Mac Anda atau di VPS (Dokploy). Hooks untuk **Claude Code**, **Antigravity** dan **OpenCode** serta gateway MCP **supergateway** tetap berjalan di Mac.
 
-- **Claude Code** (`claude-code`)
-- **Antigravity** (`antigravity`)
-- **OpenCode** (`opencode`)
-
-Memori diisolasi dan disimpan secara terpisah **berdasarkan folder / base repository Git** tempat CLI agent dibuka, serta **dibagikan secara real-time lintas sesi dan lintas agent CLI**.
+Kode ditulis dalam TypeScript sebagai **monorepo Bun workspaces** (satu folder per service di `apps/`, kode bersama di `packages/`), dijalankan langsung oleh **Bun** (tanpa build), dengan dependency injection memakai **tsyringe**. Tiap service punya Dockerfile sendiri, sehingga bisa dideploy sebagai container terpisah di Dokploy. Memori diisolasi **per folder / repository Git** dan **dibagikan lintas sesi dan lintas agent CLI**.
 
 ---
 
-## 🌟 Fitur Utama
+## 🧩 Arsitektur
 
-1. **Server Lokal, Model via 9router (bisa diganti kapan saja):**
-   - **Embeddings:** Default-nya model lokal `Xenova/bge-base-en-v1.5` (ONNX bawaan server, 768 dimensi, ±106 MB, tanpa panggilan API). Model ini hanya memahami bahasa Inggris, jadi hook menerjemahkan prompt dan ringkasan sesi yang bukan bahasa Inggris lewat `TRANSLATE_MODEL` (model chat di 9router) sebelum dicari atau disimpan. Dengan begitu memori tetap bisa dicari lintas bahasa. Alternatifnya, model embedding multibahasa lewat 9router (`openai-compatible`, mis. `jina/jina-embeddings-v4` 1024 dimensi) dengan `TRANSLATE_MODEL` dikosongkan. Untuk jalur 9router, `llm-proxy` menambahkan `dimensions` (server hanya mengirimnya untuk `text-embedding-3-*`, sedangkan Jina v4 default 2048 dan Gemini 3072, melebihi batas pgvector 2000) dan melengkapi `usage.prompt_tokens` yang tidak dikirim Jina (tanpa itu server menolak respons sebagai "Invalid JSON response").
-   - **Storage per Model Embedding:** Database lokal tersimpan di `./data/stores/<model>-<dim>d/`, satu store per model embedding, dan `./data/current` menunjuk ke store aktif. Server mengunci satu folder data ke model yang pertama mengisinya, jadi `start.sh` memilih (atau membuat) store milik model di `.env`. Mengganti model cukup ubah `.env` lalu restart, dan kembali ke model lama memulihkan memorinya. Lihat [Mengganti Model](#mengganti-model).
-   - **Workflow Engine Direct:** Menggunakan `WORKFLOW_ENGINE=direct` sehingga proses ekstraksi dan relasi memori dieksekusi secara in-process langsung tanpa dependensi ke server worker eksternal.
-   - **Model AI (LLM):** Ekstraksi memori memakai `OPENAI_MODEL` (mis. `ag/gemini-3.8-flash-low` atau `cc/claude-haiku-4-5-20251001`) lewat gateway lokal **9router** (`http://127.0.0.1:20128/v1`) dan proxy kecil `src/llm-proxy.ts` (port `20129`). Proxy ini menambahkan `"stream": false` ke request chat, karena supermemory tidak mengisi `stream` sedangkan 9router membalas dalam format streaming (SSE) jika `stream` kosong, yang membuat supermemory gagal mem-parsing JSON.
+```text
+ Mac                                              Docker Compose (Mac atau VPS)
+┌───────────────────────────────┐   HTTP    ┌──────────────────────────────────────────────────┐
+│ Claude Code / Antigravity /   │──────────▶│ supermemory :6767   (server memori + embedding)  │
+│ OpenCode  ── hooks (bun)      │           │      │ LLM + embeddings                          │
+│                               │           │      ▼                                           │
+│ supergateway :20131 (MCP)     │           │ llm-proxy :20129 ──▶ 9router :20128 ──▶ provider │
+│                               │           │                          ▲                       │
+│ Zed ──────────────────────────┼──────────▶│ zed-adapter :20130 ──────┘                       │
+└───────────────────────────────┘           └──────────────────────────────────────────────────┘
+```
 
-2. **Per-Project & Cross-Agent Shared Memory:**
-   - Otomatis mendeteksi root repository Git (`git rev-parse --show-toplevel`) atau direktori kerja saat ini.
-   - Setiap project memiliki `containerTag` unik (`proj_<folder>_<hash>`) yang dipakai bersama oleh **Claude Code**, **Antigravity**, dan **OpenCode**.
-   - Setiap memori yang disimpan dilabeli dengan agent asalnya (misal `[Agent: Claude Code]`, `[Agent: Antigravity]`, `[Agent: OpenCode]`).
-   - **Lintas Sesi:** Sesi yang dibuka hari ini dapat membaca semua catatan dari sesi kemarin.
-   - **Lintas Agent:** Pekerjaan yang dilakukan oleh Claude Code langsung terbaca saat Anda membuka project yang sama di Antigravity atau OpenCode.
+| Layanan       | Berjalan di                   | Fungsi                                                                                                          |
+| ------------- | ----------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `supermemory` | container                     | Server memori (binary rilis resmi, checksum diverifikasi saat build), embedding lokal `Xenova/bge-base-en-v1.5` |
+| `9router`     | container (`decolua/9router`) | Gateway LLM kompatibel OpenAI, menyimpan login provider                                                         |
+| `llm-proxy`   | container                     | Perantara supermemory → 9router: `stream:false` di chat, `dimensions` dan `usage` di embeddings                 |
+| `zed-adapter` | container                     | Mengubah `/v1/completions` milik Zed menjadi `/chat/completions` 9router                                        |
+| hooks         | Mac (bun)                     | Menyuntik dan menyimpan memori per sesi agent                                                                   |
+| supergateway  | Mac (brew)                    | Satu pintu untuk semua server MCP di `mcp-config.json`                                                          |
 
-3. **Lifecycle Hooks Terpadu:**
-   - **Start / Check:** Saat sesi dibuka atau sebelum giliran prompt dimulai, sistem mengambil memori terbaru project tersebut (maks. 5 ringkasan sesi + 10 perubahan terbaru, ditambah fakta hasil ekstraksi server) dan menginjeksinya ke konteks prompt (`<supermemory-context>`). Memori dari agent lain langsung terbaca tanpa menunggu proses embedding selesai. Blok `<supermemory-context>` yang dikutip ulang oleh agent otomatis dibuang sebelum disimpan, jadi konteks tidak menumpuk berlapis.
-   - **Change Observation:** Setiap kali ada modifikasi file atau eksekusi tool, perubahannya dicatat ke Supermemory.
-   - **Stop / Session End:** Saat sesi berhenti atau idle, ringkasan sesi disimpan ke Supermemory untuk referensi di sesi berikutnya.
-
-4. **Pembersihan Bersih & Bebas Konflik:**
-   - Sepenuhnya menggantikan sistem memori lama seperti `claude-mem` dan `mem0`.
-   - Terintegrasi rapi tanpa konflik MCP (baik via mcpm maupun native configs).
+Server MCP seperti playwright, chrome-devtools, pdfcraft dan figcraft butuh mesin Anda, sehingga supergateway tidak ikut di container.
 
 ---
 
@@ -40,241 +37,275 @@ Memori diisolasi dan disimpan secara terpisah **berdasarkan folder / base reposi
 
 ```text
 supermemory-local/
-├── .env                     # Konfigurasi port, model embedding & LLM 9router, data dir, direct workflow
-├── .env.example             # Template konfigurasi
-├── mcp-config.json          # Semua server MCP (format mcpServers) yang dijalankan supergateway
-├── package.json             # Scripts bun (runtime tanpa dependensi; devDependencies hanya types, tsc & prettier)
-├── tsconfig.json            # Konfigurasi TypeScript (bun run typecheck)
-├── prettier.config.ts       # Format kode (extends @irfnd/prettier-config), bun run format
-├── bin/
-│   └── supermemory-hook.ts  # Entrypoint hook CLI serbaguna untuk semua agent
-├── data/                    # Log + database lokal
-│   ├── stores/<model>-<dim>d/ # Satu database per model embedding (api-key, embedding-plan.json, models/ untuk model lokal, ...)
-│   ├── current -> stores/…  # Symlink ke store aktif (dibuat start.sh)
-│   ├── supermemory.log      # Log runtime server
-│   ├── llm-proxy.log        # Log proxy LLM (status & durasi per request)
-│   ├── zed-adapter.log      # Log adapter Zed
-│   └── supergateway.log     # Log gateway MCP
-├── scripts/
-│   ├── start.sh             # Menjalankan 9router + llm-proxy + zed-adapter + supergateway + supermemory-server (store sesuai model embedding)
-│   ├── stop.sh              # Menghentikan supermemory-server + llm-proxy + zed-adapter + supergateway (--all: juga 9router)
-│   └── status.sh            # Cek status kesehatan, port, model, store aktif & daftar store
-└── src/
-    ├── hook-handler.ts      # Handler lifecycle (start, change, stop)
-    ├── project-resolver.ts  # Deteksi root Git & hashing tag project
-    ├── supermemory-client.ts# Client API HTTP lokal
-    ├── installer.ts         # Pasang/copot hooks ke agent CLIs (Claude, Antigravity, OpenCode)
-    ├── opencode-plugin.ts   # Plugin native OpenCode (template)
-    ├── llm-proxy.ts         # Proxy supermemory → 9router (stream:false di chat, dimensions di embeddings)
-    ├── zed-adapter.ts       # Adapter Zed edit prediction: /v1/completions → 9router /chat/completions
-    ├── hooks.test.ts        # Unit test (bun test)
-    └── test-memory.ts       # Script verifikasi pembacaan & penulisan memori
+├── apps/
+│   ├── supermemory-server/     # Dockerfile (binary rilis) + entrypoint.sh + .env.example
+│   ├── 9router/                # Dockerfile (image decolua/9router) + .env.example
+│   ├── llm-proxy/              # Dockerfile + src: proxy supermemory → 9router
+│   ├── zed-adapter/            # Dockerfile + src: adapter edit prediction Zed
+│   └── hooks/                  # jalan di Mac: hook, installer, self-test, plugin OpenCode
+├── packages/
+│   ├── shared/                 # tsyringe (di.ts), logger, env, Bun.serve
+│   └── client/                 # client HTTP server memori + resolver project
+├── docker-compose.yml          # 4 layanan sekaligus, hanya `expose` (stack lokal)
+├── docker-compose.local.yml    # tambahan lokal: publish port ke 127.0.0.1
+├── mcp-config.json             # server MCP untuk supergateway lokal
+├── .env.example                # konfigurasi lokal (compose + hooks)
+├── bin/supermemory-hook.ts     # entrypoint hook semua agent
+├── bunfig.toml                 # linker hoisted agar @supermemory-local/* ter-resolve dari root
+└── scripts/                    # start.sh, stop.sh, status.sh, lib.sh
 ```
+
+Tiap app/package punya `package.json` (nama `@supermemory-local/<nama>`), `config.ts` (konfigurasi dari env), kelas layanan dengan constructor injection, `container.ts` (composition root tsyringe) dan test di sebelahnya. Semua import absolut: `@/…` untuk file di app yang sama (`paths` di `tsconfig.json` tiap app) dan `@supermemory-local/shared/…` atau `@supermemory-local/client/…` untuk package bersama. Kelas tidak memakai dekorator: wiring seluruhnya di `container.ts`, sehingga hook tetap berfungsi saat Bun dijalankan dari folder proyek mana pun.
 
 ---
 
-## 🚀 Panduan Penggunaan Cepat
+## 🚀 Menjalankan di Mac
 
-### 1. Konfigurasi (`.env`)
-
-File `.env` sudah diinisialisasi dengan konfigurasi default:
-
-```ini
-PORT=6767
-SUPERMEMORY_PORT=6767
-SUPERMEMORY_DATA_DIR=./data   # log + data/stores/<model>-<dim>d per model embedding
-WORKFLOW_ENGINE=direct
-
-# Embeddings lokal (bahasa Inggris saja) + terjemahan otomatis
-SUPERMEMORY_EMBEDDING_PROVIDER=local
-SUPERMEMORY_EMBEDDING_MODEL=Xenova/bge-base-en-v1.5
-SUPERMEMORY_EMBEDDING_DIMENSIONS=768
-TRANSLATE_MODEL=ollama/gpt-oss:120b   # model chat 9router untuk menerjemahkan ke bahasa Inggris (jalan di dalam hook, harus menjawab dalam hitungan detik); kosong = mati
-
-# 9router Gateway (Local OpenAI-compatible API)
-OPENAI_BASE_URL=http://127.0.0.1:20128/v1
-OPENAI_API_KEY=<your-9router-api-key>
-OPENAI_MODEL=ag/gemini-3.8-flash-low   # LLM ekstraksi memori (butuh JSON + tool calling)
-
-# Supermemory Client API (dipakai hooks)
-SUPERMEMORY_API_URL=http://127.0.0.1:6767
-SUPERMEMORY_API_KEY=sm_local_key   # placeholder: client memakai data/current/api-key buatan server
-
-# 9router
-NINEROUTER_PORT=20128
-NINEROUTER_HOST=127.0.0.1
-
-# Proxy supermemory → 9router ("stream": false di chat, `dimensions` di embeddings)
-LLM_PROXY_PORT=20129
-
-# Adapter Zed edit prediction (pakai OPENAI_BASE_URL + OPENAI_API_KEY di atas)
-ZED_ADAPTER_PORT=20130
-ZED_ADAPTER_REASONING_EFFORT=none
-```
-
-> **Catatan Model:** `ag/gemini-3.8-flash-low` (±50 detik per panggilan) dan `cc/claude-haiku-4-5-20251001` (±1–5 detik) sudah teruji bisa mengekstrak memori (tool calling & JSON) selama server berjalan lewat `llm-proxy` (otomatis dari `bun run start`). Tanpa proxy, 9router membalas dalam format streaming dan semua dokumen berakhir `failed` dengan error "Invalid JSON response". Untuk mengganti model, lihat [Mengganti Model](#mengganti-model).
-
----
-
-### 2. Menjalankan Server
-
-Butuh [Bun](https://bun.sh) (`curl -fsSL https://bun.sh/install | bash`). Pasang devDependencies sekali (`bun install`), lalu gunakan script bun atau bash langsung:
+Prasyarat: [Bun](https://bun.sh), Docker (OrbStack atau Docker Desktop), dan `brew install supercorp-ai/tap/supergateway`.
 
 ```bash
-# Jalankan 9router (jika belum), llm-proxy, zed-adapter, supergateway & Supermemory Server di background:
-bun run start
-# atau: ./scripts/start.sh (tambahkan --foreground untuk server di foreground)
-```
-
-Cek status layanan:
-
-```bash
+bun install
+cp .env.example .env     # isi OPENAI_API_KEY, NINEROUTER_PASSWORD, CONTEXT7_API_KEY
+bun run start            # docker compose up + supergateway
 bun run status
-# atau: ./scripts/status.sh
+bun run logs             # docker compose logs -f
+bun run stop             # docker compose down + stop supergateway (volume dan data tetap)
 ```
 
-Untuk menghentikan:
+`start` membangun image, menunggu semua container `healthy` (boot pertama mengunduh model embedding ±50 detik), lalu menyalakan supergateway. Port dipublish hanya ke `127.0.0.1`:
 
-```bash
-bun run stop
-# atau: ./scripts/stop.sh
-# ./scripts/stop.sh --all  # sekalian menghentikan 9router
-```
+| URL                                     | Isi                         |
+| --------------------------------------- | --------------------------- |
+| `http://127.0.0.1:6767`                 | Supermemory                 |
+| `http://127.0.0.1:20128`                | Dashboard dan `/v1` 9router |
+| `http://127.0.0.1:20129`                | llm-proxy                   |
+| `http://127.0.0.1:20130/v1/completions` | Adapter Zed                 |
+| `http://127.0.0.1:20131/<server>/mcp`   | Gateway MCP                 |
 
----
+`bun run start:mcp` / `stop:mcp` hanya mengurus supergateway, dipakai bila server memori berjalan di VPS.
 
-### 3. Tes Simpan & Cari Memori
+### Data lokal
 
-Jalankan script verifikasi untuk memastikan Supermemory lokal dan 9router berfungsi:
+- `SUPERMEMORY_DATA=./data/supermemory` menyimpan store memori di folder proyek (`data/supermemory/stores/<model>-<dim>d`, `data/supermemory/current` menunjuk ke store aktif).
+- `NINEROUTER_DATA=${HOME}/.9router` memakai login provider 9router yang sudah ada.
+- Kosongkan keduanya untuk memakai named volume Docker (`supermemory-data`, `ninerouter-data`), seperti di Dokploy.
+- Container 9router memakai `~/.9router` yang sama dengan 9router lokal. Jangan jalankan keduanya bersamaan.
+
+### Memori lama (versi tanpa Docker)
+
+Store buatan binary macOS terenkripsi dengan kunci turunan ID hardware Mac, jadi **container Linux tidak bisa membukanya** (error `Could not unlock local storage`) dan salinan folder tidak cukup. Memori lama di `data/stores/` tidak dihapus dan tidak dipakai. Pilihannya:
+
+- Biarkan dan mulai dari store kosong di container.
+- Ekspor lewat API dari server lama (`POST /v3/documents/list`, `GET /v3/documents/:id`) lalu impor ke server baru dengan `POST /v3/documents`. Server mengekstrak ulang setiap dokumen lewat LLM, jadi biayanya sebanding dengan jumlah dokumen (batas lisensi Lite: 10.000).
+
+### Tes memori
 
 ```bash
 bun run test-memory
 ```
 
-Script memakai container tag terpisah (`<tag>_selftest`) sehingga catatan uji tidak mencemari memori project asli, dan keluar dengan exit code 1 jika gagal. Output akan menguji:
-
-1. Status koneksi ke `http://127.0.0.1:6767`
-2. Identifikasi tag unik project (`proj_<name>_<hash>`)
-3. Penyimpanan konten memori baru
-4. Pencarian semantik (vektor) dari database lokal
+Memakai tag `<project>_selftest` supaya catatan uji tidak bercampur dengan memori asli, dan exit code 1 bila gagal.
 
 ---
 
-### 4. Instalasi Hooks ke Agent CLI
+## 🔑 Autentikasi
 
-Jalankan script instalasi hooks:
+- Server memori hanya menerapkan key-nya otomatis untuk request dari loopback. Request dari container lain atau dari Traefik tanpa `Authorization: Bearer <key>` mendapat 401.
+- Hook membaca key dari `SUPERMEMORY_API_KEY`, atau dari `data/supermemory/current/api-key` bila kosong (cocok untuk mode lokal dengan bind mount). Key dibuat server saat boot pertama dan tidak bisa ditentukan sendiri.
+- Hook tidak pernah memblokir agent: key salah atau server tak terjangkau hanya membuat hook diam (exit 0).
+
+---
+
+## 🌐 Deploy ke VPS dengan Dokploy
+
+Tiap service di `apps/` dideploy sebagai **Application** Dokploy tersendiri dari repo yang sama (monorepo): empat container terpisah, masing-masing punya environment, volume, domain dan log sendiri. Mac hanya menjalankan hooks dan supergateway (server MCP seperti playwright butuh mesin Anda, jadi tetap lokal).
+
+| App Dokploy          | Dockerfile Path                      | Port    | Volume (Advanced → Volumes)     | Domain                                                  |
+| -------------------- | ------------------------------------ | ------- | ------------------------------- | ------------------------------------------------------- |
+| `9router`            | `apps/9router/Dockerfile`            | `20128` | `ninerouter-data` → `/app/data` | `router.example.com`                                    |
+| `llm-proxy`          | `apps/llm-proxy/Dockerfile`          | `20129` | -                               | tidak ada (internal)                                    |
+| `supermemory-server` | `apps/supermemory-server/Dockerfile` | `6767`  | `supermemory-data` → `/data`    | `memory.example.com`                                    |
+| `zed-adapter`        | `apps/zed-adapter/Dockerfile`        | `20130` | -                               | `zed.example.com` (opsional, wajib `ZED_ADAPTER_TOKEN`) |
+
+### 1. Siapkan VPS dan domain
+
+- VPS Linux dengan minimal 2 GB RAM dan 30 GB disk, port `80`, `443` dan `3000` bebas.
+- Subdomain yang mengarah ke IP VPS lewat record **A**, misalnya `memory.example.com`, `router.example.com` dan (opsional) `zed.example.com`.
+- Repo ini ada di GitHub/GitLab/Git yang bisa dibaca Dokploy (public, atau private dengan akses yang sudah dihubungkan).
+
+### 2. Pasang Dokploy
 
 ```bash
-# Pasang ke semua agent (Claude Code, Antigravity, OpenCode):
+ssh root@<ip-vps>
+curl -sSL https://dokploy.com/install.sh | sh
+```
+
+Skrip memasang Docker bila belum ada. Setelah selesai buka `http://<ip-vps>:3000` dan buat akun admin. Pastikan firewall mengizinkan port 80, 443 dan 3000.
+
+### 3. Buat empat Application
+
+Dalam satu project, ulangi untuk tiap baris tabel di atas: **Create Service** → **Application**, lalu tab **General**:
+
+1. **Provider**: GitHub atau Git, pilih repo dan branch. **Build Path**: `/`.
+2. **Build Type**: `Dockerfile`.
+3. **Dockerfile Path**: sesuai tabel. **Docker Context Path**: `.` (akar repo, karena build butuh `packages/` dan `bun.lock`). Simpan.
+
+Dokploy menampilkan **App Name** di bawah nama service (bentuk `project-service-hash`). Itu hostname internal service di jaringan Dokploy, dan dipakai di URL antar-service pada langkah 4.
+
+### 4. Isi Environment dan Volume
+
+Tab **Environment** tiap app: salin isi `apps/<service>/.env.example` lalu isi nilainya. Urutan pengisian (karena saling merujuk):
+
+1. `9router`: `INITIAL_PASSWORD` (`openssl rand -hex 16`).
+2. `llm-proxy`: `OPENAI_BASE_URL=http://<App Name 9router>:20128/v1`.
+3. `supermemory-server`: `OPENAI_BASE_URL=http://<App Name llm-proxy>:20129`, `OPENAI_API_KEY` (string apa saja selama 9router belum mewajibkan key), model ekstraksi dan embedding.
+4. `zed-adapter`: `OPENAI_BASE_URL=http://<App Name 9router>:20128/v1`, `OPENAI_API_KEY`, `ZED_ADAPTER_TOKEN` (`openssl rand -hex 24`).
+
+Tab **Advanced** → **Volumes** → **Volume Mount** untuk `9router` dan `supermemory-server` sesuai tabel (data hilang tiap deploy tanpa volume). Biarkan replica 1.
+
+> **Jangan ganti atau buat ulang app `llm-proxy`.** Server memori mengunci alamat embedding-nya (`embedding-plan.json`), jadi App Name baru membuat store lama menolak boot. Bila terpaksa, kembalikan App Name yang sama.
+
+### 5. Pasang domain
+
+Tab **Domains** → **Create Domain** di app yang bertanda domain pada tabel: **Host**, **Container Port** dari tabel, **HTTPS** ON, **Certificate** Let's Encrypt. Dokploy memasang Traefik di depan container, tanpa `ports`. Jangan beri domain ke `llm-proxy`: ia tidak punya autentikasi dan meneruskan ke akun LLM Anda. `zed-adapter` hanya boleh publik bila `ZED_ADAPTER_TOKEN` terisi (tanpa token adapter menjawab siapa saja).
+
+### 6. Deploy
+
+Deploy berurutan: `9router`, `llm-proxy`, `supermemory-server`, `zed-adapter`. Pantau tab **Logs** tiap app. Healthcheck ada di Dockerfile, dan boot pertama `supermemory-server` butuh beberapa menit (unduh binary dan model embedding). Domain baru hidup setelah container `healthy`.
+
+### 7. Login provider di 9router
+
+Buka `https://router.example.com`, login dengan `INITIAL_PASSWORD`, lalu tambahkan provider. Alternatifnya salin data dari Mac saat container 9router berhenti: kirim `~/.9router/{db,auth,jwt-secret,machine-id}` ke volume `ninerouter-data` di VPS (ubah pemilik ke uid 1000).
+
+Untuk mengunci `/v1` dengan key: buat API key di dashboard, isi `OPENAI_API_KEY` di `supermemory-server` dan `zed-adapter` dengan key itu, set `REQUIRE_API_KEY=true` di `9router`, lalu deploy ulang ketiganya.
+
+### 8. Ambil API key server memori
+
+Buka tab **Terminal** app `supermemory-server` lalu jalankan `cat /data/current/api-key`. Key juga tercetak di log boot pertama, jadi siapa pun yang bisa membuka log Dokploy bisa membacanya.
+
+### 9. Arahkan Mac ke VPS
+
+Ubah `.env` di Mac:
+
+```ini
+SUPERMEMORY_API_URL=https://memory.example.com
+SUPERMEMORY_API_KEY=<key dari langkah 8>
+OPENAI_BASE_URL=https://router.example.com/v1
+OPENAI_API_KEY=<key 9router bila REQUIRE_API_KEY=true>
+```
+
+Hooks membaca `.env` di setiap panggilan, jadi tidak perlu dipasang ulang. Lalu jalankan hanya gateway MCP:
+
+```bash
+bun run stop        # matikan stack lokal bila masih berjalan
+bun run start:mcp
 bun run install-hooks
-
-# Atau pasang per agent:
-bun run install-hooks claude-code
-bun run install-hooks antigravity
-bun run install-hooks opencode
+bun run test-memory
 ```
 
-> **Catatan Keamanan:** Setiap file konfigurasi yang diubah (`~/.claude/settings.json`, `~/.gemini/config/hooks.json`, `~/.config/opencode/opencode.json`) secara otomatis dibuatkan backup bertanda `.bak-<timestamp>` sebelum dimodifikasi.
+Zed: `api_url` `https://zed.example.com/v1/completions` dan `ZED_ADAPTER_TOKEN` sebagai API key provider.
 
-Jika ingin mencopot hooks kembali:
+### 10. Pembaruan dan backup
 
-```bash
-bun run uninstall-hooks
-```
+- Perubahan kode: push ke branch, lalu **Deploy** ulang app yang berubah. Untuk deploy otomatis, salin **Webhook URL** dari tab **Deployments** tiap app ke repo (Settings → Webhooks, event Push), dan isi **Watch Paths** (tab General) supaya push hanya men-deploy app yang terkena: `apps/llm-proxy/**`, `packages/shared/**`, `bun.lock` untuk `llm-proxy` (sama untuk `zed-adapter`); `apps/supermemory-server/**` untuk server memori; `apps/9router/**` untuk 9router.
+- Versi 9router: `ARG NINEROUTER_VERSION` di `apps/9router/Dockerfile`. Versi supermemory-server: `ARG SUPERMEMORY_VERSION` di `apps/supermemory-server/Dockerfile`.
+- Backup: volume `supermemory-data` (memori) dan `ninerouter-data` (login provider).
+
+### Alternatif: satu stack Compose
+
+Bila lebih suka satu service untuk keempatnya: **Create Service** → **Compose**, **Compose Type** `Docker Compose`, **Compose Path** `./docker-compose.yml`. Environment diisi dari `.env.example` (bagian compose), domain per service lewat tab **Domains** (`supermemory` `6767`, `9router` `20128`). File compose yang sama dipakai lokal.
+
+### Catatan
+
+- Image dan compose sudah diuji di OrbStack (Linux arm64), termasuk image `zed-adapter` yang dijalankan sendiri dengan env URL ke 9router. Langkah Dokploy mengikuti dokumentasinya, tetapi belum dijalankan di VPS sungguhan (terutama Watch Paths, Terminal, dan OAuth dari dashboard remote).
 
 ---
 
 ## 🔍 Cara Kerja Tiap Hook
 
+Semua agent memanggil `bun --env-file=<repo>/.env bin/supermemory-hook.ts <agent> <aksi>` dengan payload JSON di stdin. Teks yang dicetak aksi `start`/`sync` menjadi konteks model.
+
 ### A. Claude Code (`~/.claude/settings.json`)
 
-- **`SessionStart`** (matcher `startup|resume|clear|compact`): Mengeksekusi `bun --env-file=<repo>/.env bin/supermemory-hook.ts claude-code start`. Memori relevan project (terbaru dulu) diambil dan disajikan sebagai bagian dari konteks percakapan. Fakta hasil ekstraksi server (`/v4/profile`: semua `static` + 15 `dynamic` terbaru) ikut ditambahkan.
-- **`UserPromptSubmit`**: Mengeksekusi `claude-code sync` di setiap prompt. Hanya memori baru dari agent/sesi lain sejak konteks terakhir yang disuntikkan (marker per sesi di `$TMPDIR/supermemory-sync/`), jadi sesi yang lama terbuka tetap sinkron. Selain itu, isi prompt (diterjemahkan dulu ke bahasa Inggris lewat `TRANSLATE_MODEL` jika perlu) dipakai sebagai query hybrid search (`/v4/search`, `searchMode: "hybrid"`): memori hasil ekstraksi yang relevan ditambah maksimal 2 potongan dokumen mentah (untuk dokumen yang ekstraksinya belum selesai). Prompt 1–2 kata ("ya", "lanjut") dilewati, dan setiap hasil hanya disuntikkan sekali per sesi.
-- **`PostToolUse`** (matcher `Write|Edit|MultiEdit|NotebookEdit|Bash`): Mencatat nama tool + path file (`tool_name`, `tool_input.file_path`) atau command Bash ke Supermemory. Command read-only (`ls`, `cat`, `git status`, dll.) diabaikan.
-- **`Stop`**: Menyimpan balasan terakhir asisten (`last_assistant_message`, fallback ke `transcript_path`) sebagai ringkasan, maks. 4000 karakter. Ringkasan yang bukan bahasa Inggris diterjemahkan dulu lewat `TRANSLATE_MODEL`.
-- **`PostCompact`**: Setelah `/compact` atau auto-compact, `claude-code compact` mengambil ringkasan compaction terakhir dari `transcript_path` (entry `isCompactSummary`), membuang pembuka/penutup instruksinya, lalu menyimpannya sebagai `session_summary` (maks. 40.000 karakter).
+- **`SessionStart`** (`startup|resume|clear|compact`): `start`. Mengambil memori project terbaru (maks. 5 ringkasan sesi dan 10 perubahan) plus fakta hasil ekstraksi server (`/v4/profile`), lalu menyuntiknya sebagai `<supermemory-context>`.
+- **`UserPromptSubmit`**: `sync` di setiap prompt. Hanya memori baru dari agent/sesi lain sejak konteks terakhir yang disuntik (marker per sesi di `$TMPDIR/supermemory-sync/`). Prompt juga dipakai sebagai query hybrid search (`/v4/search`), diterjemahkan dulu ke bahasa Inggris lewat `TRANSLATE_MODEL` bila perlu. Prompt 1–2 kata dilewati dan tiap hasil disuntik sekali per sesi.
+- **`PostToolUse`** (`Write|Edit|MultiEdit|NotebookEdit|Bash`): mencatat nama tool dan path file atau command. Command read-only (`ls`, `cat`, `git status`, dst.) diabaikan.
+- **`Stop`**: menyimpan balasan terakhir asisten (maks. 4000 karakter, diterjemahkan ke bahasa Inggris bila perlu).
+- **`PostCompact`**: menyimpan ringkasan compaction dari `transcript_path` (maks. 40.000 karakter).
 
 ### B. Antigravity (`~/.gemini/config/hooks.json`)
 
-- **`PreInvocation`** (jalan sebelum setiap panggilan model, jadi hasilnya di-cache 30 detik per percakapan): Mengeksekusi `supermemory-hook.ts antigravity start`. Mengembalikan objek JSON `{ "injectSteps": [{ "ephemeralMessage": "<supermemory-context>..." }] }` sehingga memori project otomatis disuntikkan sebelum model memproses instruksi.
-- **`PostToolUse`** (matcher `write_to_file|write_file|replace_file_content|multi_replace_file_content|edit_file|run_command`; nama tool Antigravity berbeda antar versi model, `write_file`/`edit_file` memakai argumen `Path`): Mencatat eksekusi tool ke Supermemory dan mengembalikan `{}`. Command read-only (`ls`, `cat`, `git status`, dll.) diabaikan agar memori tidak penuh noise.
-- **`Stop`**: Menyimpan checkpoint ringkasan sesi. Payload `Stop` tidak membawa teks balasan, jadi balasan terakhir dibaca dari `transcriptPath` (entri `PLANNER_RESPONSE`).
-- Antigravity tidak punya hook compaction (hanya `PreInvocation`, `PostInvocation`, `PreToolUse`, `PostToolUse`, `SessionStart`), jadi ringkasan compaction-nya tidak bisa ditangkap. `Stop` tetap menyimpan balasan terakhir di setiap giliran.
+- **`PreInvocation`**: `start` sebelum setiap panggilan model, dengan cache 30 detik per percakapan. Mengembalikan `{ "injectSteps": [{ "ephemeralMessage": "<supermemory-context>..." }] }`.
+- **`PostToolUse`** (`write_to_file|write_file|replace_file_content|multi_replace_file_content|edit_file|run_command`): mencatat eksekusi tool, command read-only diabaikan. Selalu menjawab JSON (`{}`).
+- **`Stop`**: menyimpan balasan terakhir dari `transcriptPath` (entri `PLANNER_RESPONSE`).
+- Antigravity tidak punya hook compaction.
 
 ### C. OpenCode (`~/.config/opencode/plugins/supermemory-local.ts`)
 
-- Plugin di-generate dari `src/opencode-plugin.ts` dan otomatis ter-load dari folder plugins global (tidak perlu, dan jangan, didaftarkan di `opencode.json` karena akan ter-load dua kali).
-- `opencode` di mesin ini adalah **OpenCode 2.x**. Hook v1 (`tool.execute.after`, `experimental.chat.system.transform`, `event`) tidak pernah dipanggil, jadi plugin memakai API v2 (`export default { id, setup(ctx) }`, dokumentasi: opencode.ai/v2/docs/build/plugins/):
-  - `ctx.session.hook('context')`: Menginjeksi memori project ke `event.system` sebelum setiap panggilan model (`start` sekali per sesi, lalu `sync` paling sering tiap 30 detik untuk memori baru dari agent/sesi lain).
-  - `ctx.tool.hook('execute.after')`: Mencatat tool execution ke memori (tool read-only seperti `read`, `grep`, `glob` diabaikan). Tidak ditunggu, supaya tool tidak tertahan.
-  - `session.execution.succeeded` (+ teks terakhir dari `session.text.ended`): Menyimpan ringkasan respons akhir asisten. v2 tidak punya event idle.
-  - `session.compaction.ended`: Menyimpan ringkasan compaction lewat action `compact`. Isi event ini belum terdokumentasi, jadi bagian ini belum terverifikasi.
-- Instance plugin lama bertahan di service latar belakang setelah plugin diubah dan masing-masing ikut menangani event yang sama (hook sudah men-dedupe ringkasan per sesi). Jalankan `opencode service restart` setelah mengubah plugin untuk membersihkannya.
+- Plugin dibuat dari `apps/hooks/src/opencode-plugin.ts` oleh installer dan otomatis ter-load dari folder plugins global. Jangan mendaftarkannya di `opencode.json` (ter-load dua kali).
+- Memakai API **OpenCode 2.x** (`export default { id, setup(ctx) }`, docs: opencode.ai/v2/docs/build/plugins/): `ctx.session.hook('context')` menyuntik memori sebelum tiap panggilan model, `ctx.tool.hook('execute.after')` mencatat tool, `session.execution.succeeded` menyimpan ringkasan, `session.compaction.ended` menyimpan ringkasan compaction (isi event belum terdokumentasi, belum terverifikasi).
+- Instance plugin lama bertahan di service latar belakang; jalankan `opencode service restart` setelah mengubah plugin. Plugin berubah hanya setelah `bun run install-hooks opencode`.
+
+### Instalasi hooks
+
+```bash
+bun run install-hooks [all|claude-code|antigravity|opencode]
+bun run uninstall-hooks [all|claude-code|antigravity|opencode]
+```
+
+Setiap file konfigurasi yang diubah dibackup dulu sebagai `.bak-<timestamp>`. Installer menulis path absolut bun dan repo ini, jadi pindah folder berarti pasang ulang.
 
 ---
 
-## ✏️ Zed Edit Prediction (via `zed-adapter`)
+## ✏️ Zed Edit Prediction
 
-Provider `open_ai_compatible_api` di Zed mengirim format legacy `/v1/completions` (`{"prompt": ...}`), sedangkan 9router hanya punya `/chat/completions`. Tanpa adapter, `prompt` diabaikan, `messages` kosong, dan Gemini menolak dengan `400 contents is not specified`. `bun run start` menjalankan `src/zed-adapter.ts` di port `ZED_ADAPTER_PORT` (default `20130`) memakai `OPENAI_BASE_URL` & `OPENAI_API_KEY` dari `.env` (header Authorization dari Zed hanya dipakai jika key di `.env` kosong).
-
-Adapter mengirim `reasoning_effort` dari `ZED_ADAPTER_REASONING_EFFORT` (default `none`), lalu merapikan output model chat: membuang pembungkus ` ``` `, menerapkan `stop` secara lokal (Gemini membatasi 5 stop sequence), dan menambahkan kembali marker zeta `<|editable_region_start|>`/`<|editable_region_end|>` jika hilang.
+Provider `open_ai_compatible_api` di Zed memakai format legacy `/v1/completions` (`{"prompt": ...}`), sedangkan 9router hanya punya `/chat/completions`. `zed-adapter` menerjemahkannya, mengirim `reasoning_effort` dari `ZED_ADAPTER_REASONING_EFFORT` (default `none`), membuang pembungkus ` ``` `, menerapkan `stop` secara lokal, dan memasang kembali marker zeta `<|editable_region_start|>` / `<|editable_region_end|>` bila hilang.
 
 ```json
 "edit_predictions": {
   "provider": "open_ai_compatible_api",
   "open_ai_compatible_api": {
     "api_url": "http://127.0.0.1:20130/v1/completions",
-    "model": "ag/gemini-3.8-flash-low",
+    "model": "cc/claude-haiku-4-5-20251001",
     "prompt_format": "zeta"
   }
 }
 ```
 
-> Pakai model tanpa thinking berat. `ag/gemini-3.8-flash-low` sekitar 3 detik per prediksi; varian `*-high` (mis. combo `pecut-ai`) 22–34 detik.
+Pakai model tanpa thinking berat. Isi `ZED_ADAPTER_TOKEN` untuk mewajibkan `Authorization: Bearer <token>` (Zed mengirimnya sebagai API key provider); tanpa token adapter terbuka untuk siapa saja, jadi jangan diberi domain publik.
 
 ---
 
 ## 🔌 Gateway MCP (supergateway)
 
-Satu pintu untuk semua server MCP, menggantikan `mcpm`. [supergateway](https://github.com/supercorp-ai/supergateway) (`brew install supercorp-ai/tap/supergateway`) membaca `mcp-config.json` (format `mcpServers`, boleh komentar) dan melayani tiap server di `http://127.0.0.1:20131/<nama>/mcp` (Streamable HTTP, stateful: satu proses per sesi klien, jadi state browser Playwright tetap hidup selama sesi). `bun run start/status/stop` ikut menjalankan, menampilkan, dan menghentikannya (PID `.supergateway.pid`, log `data/supergateway.log`).
+[supergateway](https://github.com/supercorp-ai/supergateway) membaca `mcp-config.json` (format `mcpServers`) dan melayani tiap server di `http://127.0.0.1:20131/<nama>/mcp` (Streamable HTTP, stateful: satu proses per sesi klien). `bun run start`/`start:mcp` menjalankannya (PID `.supergateway.pid`, log `data/supergateway.log`), `status` menampilkannya, `stop` menghentikannya.
 
-- Tambah/ubah server: edit `mcp-config.json`, cek dengan `bun run mcp:check`, lalu `bun run stop && bun run start` (server dimulai ulang agar config terbaca).
-- Rahasia (`CONTEXT7_API_KEY`) ditulis sebagai `${VAR}` di config dan diisi dari `.env`; variabel yang kosong/tidak ada membuat gateway gagal start.
-- Port: `port` di `mcp-config.json` dan `MCP_GATEWAY_PORT` di `.env` harus sama (default `20131`).
-- Klien menunjuk ke URL gateway: Claude Code `claude mcp add --transport http -s user <nama> http://127.0.0.1:20131/<nama>/mcp`; Antigravity (`~/.gemini/config/mcp_config.json`) `{"serverUrl": "..."}`; OpenCode v2 (`opencode.json`) `"mcp": {"servers": {"<nama>": {"type": "remote", "url": "..."}}}`.
-- Gateway tidak aktif = semua alat MCP di agent gagal tersambung, jadi jalankan `bun run start` dulu.
+- Tambah/ubah server: edit `mcp-config.json`, cek dengan `bun run mcp:check`, lalu restart (`bun run stop:mcp && bun run start:mcp`).
+- Rahasia (`CONTEXT7_API_KEY`) ditulis sebagai `${VAR}` dan diisi dari `.env`; variabel kosong membuat gateway gagal start.
+- `port` di `mcp-config.json` dan `MCP_GATEWAY_PORT` harus sama (default `20131`).
+- Klien: Claude Code `claude mcp add --transport http -s user <nama> http://127.0.0.1:20131/<nama>/mcp`; Antigravity (`~/.gemini/config/mcp_config.json`) `{"serverUrl": "..."}`; OpenCode v2 (`opencode.json`) `"mcp": {"servers": {"<nama>": {"type": "remote", "url": "..."}}}`.
+- Gateway mati berarti semua alat MCP gagal tersambung.
 
 ---
 
-## 🛠️ Pemeliharaan & Reset Data
+## 🛠️ Pemeliharaan
 
-### Membersihkan Data Testing
+### Reset memori
 
-Jika ingin mengosongkan riwayat memori model embedding yang sedang aktif:
+```bash
+bun run stop
+rm -rf data/supermemory "${TMPDIR}supermemory-sync"     # bind mount lokal
+# named volume: docker volume rm supermemory_supermemory-data
+bun run start
+```
 
-1. Hentikan server:
-   ```bash
-   ./scripts/stop.sh
-   ```
-2. Hapus store aktif beserta marker sesi hook:
-   ```bash
-   rm -rf "./data/$(readlink ./data/current)" "${TMPDIR}supermemory-sync"
-   ```
-   Untuk mengosongkan semua model sekaligus: `rm -rf ./data/stores ./data/current "${TMPDIR}supermemory-sync"`.
-3. Nyalakan kembali server:
-   ```bash
-   ./scripts/start.sh
-   ```
+### Mengganti model
 
-### Mengganti Model
+Semua model diatur di `.env`; setelah mengubahnya jalankan `bun run stop && bun run start` agar container dibuat ulang dengan env baru.
 
-Semua model diatur di `.env`, dan setiap penggantian cukup diikuti `bun run stop && bun run start`. `start.sh` melewati layanan yang sudah berjalan, jadi tanpa `stop` proses lama tetap memakai `.env` versi lama.
+**Model embedding (`SUPERMEMORY_EMBEDDING_*`).** Server mengunci folder data ke provider, model, dimensi dan endpoint yang pertama mengisinya (`embedding-plan.json`) dan menolak boot bila berbeda. Karena itu entrypoint memakai satu store per model (`stores/<model>-<dim>d`): model baru mendapat store kosong, dan kembali ke model lama membuka store lamanya. Memori tidak dibagi antar model.
 
-#### Model embedding (`SUPERMEMORY_EMBEDDING_*`)
-
-Server mengunci folder data ke provider, model, dimensi, dan endpoint yang pertama mengisinya (`embedding-plan.json`), lalu menolak start (`Embedding model mismatch`) kalau `.env` berbeda. Karena itu `start.sh` memakai satu store per model di `data/stores/<model>-<dim>d/`. Mengganti model tidak menghapus apa pun: model baru mendapat store kosong, dan kembali ke model lama membuka store lamanya lagi. Memori tidak dibagi antar model, karena embedding dari model berbeda tidak bisa dibandingkan.
-
-1. Cek dimensi model baru lewat 9router. Hasilnya harus ≤ 2000, dan model harus menghormati `dimensions`:
+1. Cek dimensi model baru lewat 9router. Hasilnya harus ≤ 2000 dan model harus menghormati `dimensions`:
    ```bash
    set -a; source .env; set +a
    curl -s http://127.0.0.1:20128/v1/embeddings -H "Authorization: Bearer $OPENAI_API_KEY" \
@@ -282,61 +313,48 @@ Server mengunci folder data ke provider, model, dimensi, dan endpoint yang perta
      -d '{"model":"<model-baru>","input":"tes","dimensions":1024}' \
      | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["data"][0]["embedding"]))'
    ```
-   Kalau hasilnya bukan 1024, model mengabaikan `dimensions`. Pakai dimensi aslinya (maksimal 2000) di `SUPERMEMORY_EMBEDDING_DIMENSIONS`.
-2. Ubah `SUPERMEMORY_EMBEDDING_MODEL` (dan `SUPERMEMORY_EMBEDDING_DIMENSIONS` bila perlu) di `.env`.
-3. Jalankan `bun run stop && bun run start`, lalu pastikan baris `Data:` dan `Embeddings:` menunjuk ke model baru. `bun run status` menampilkan store aktif dan daftar semua store.
-4. Opsional:
-   - Hapus store model yang tidak dipakai lagi: `rm -rf ./data/stores/<nama-store>`.
-   - Bawa memori lama ke model baru: ekspor dari store lama (`POST /v3/documents/list` lalu `GET /v3/documents/:id`) sebelum langkah 2, lalu masukkan ulang dengan `POST /v3/documents` setelah langkah 3. Ekstraksi ulang memakai kuota 9router sebanding dengan jumlah dokumen.
+2. Ubah `SUPERMEMORY_EMBEDDING_MODEL` (dan `_DIMENSIONS`, `_PROVIDER` bila perlu), lalu `bun run stop && bun run start`.
+3. Opsional: hapus store model yang tidak dipakai (`rm -rf data/supermemory/stores/<nama>`).
 
-> Endpoint embedding (`http://127.0.0.1:$LLM_PROXY_PORT`) ikut terkunci, jadi mengganti `LLM_PROXY_PORT` membuat store yang ada menolak start. Kembalikan port-nya, atau hapus store tersebut.
+Endpoint embedding (`http://llm-proxy:20129`) ikut terkunci, jadi mengganti nama atau port layanan itu membuat store yang ada menolak boot.
 
-#### Terjemahan (`TRANSLATE_MODEL`)
+**Terjemahan (`TRANSLATE_MODEL`).** Model embedding yang hanya berbahasa Inggris butuh model chat yang menerjemahkan prompt dan ringkasan sesi ke bahasa Inggris (timeout 8 detik; gagal berarti teks asli dipakai). Ubah tanpa restart (hook membaca `.env` di tiap panggilan). Embedding multibahasa (mis. Jina): kosongkan `TRANSLATE_MODEL=`.
 
-Model embedding yang hanya berbahasa Inggris (mis. `Xenova/bge-base-en-v1.5`) butuh `TRANSLATE_MODEL`, yaitu model chat 9router yang menerjemahkan prompt (`sync`) dan ringkasan sesi (`stop`) ke bahasa Inggris. Teks yang sudah berbahasa Inggris dilewati tanpa panggilan LLM. Catatan perubahan tool dan ringkasan compaction tidak diterjemahkan, karena memori hasil ekstraksi server sudah berbahasa Inggris. Kalau terjemahan gagal atau lewat batas waktu (8 detik untuk prompt, 12 detik untuk ringkasan), teks asli yang dipakai. Prompt berbahasa Indonesia jadi lebih lambat sekitar 1–2 detik.
+**Model ekstraksi memori (`OPENAI_MODEL`).** Tidak terkunci. Pastikan model membalas JSON:
 
-- Ganti model penerjemah: ubah `TRANSLATE_MODEL` di `.env`. Hook membaca `.env` di setiap panggilan, jadi tidak perlu restart.
-- Model embedding multibahasa (mis. Jina): kosongkan `TRANSLATE_MODEL=`.
+```bash
+curl -s http://127.0.0.1:20128/v1/chat/completions -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"<model-baru>","stream":false,"response_format":{"type":"json_object"},"messages":[{"role":"user","content":"balas {\"ok\":true}"}]}'
+```
 
-#### Model LLM ekstraksi memori (`OPENAI_MODEL`)
+Lalu ubah `OPENAI_MODEL` dan restart. Panggilan baru di `docker compose logs llm-proxy` harus berstatus `200`.
 
-Model ini tidak terkunci, dan memori lama tetap aman.
-
-1. Pastikan model ada di 9router dan bisa membalas JSON:
-   ```bash
-   curl -s http://127.0.0.1:20128/v1/chat/completions -H "Authorization: Bearer $OPENAI_API_KEY" \
-     -H 'Content-Type: application/json' \
-     -d '{"model":"<model-baru>","stream":false,"response_format":{"type":"json_object"},"messages":[{"role":"user","content":"balas {\"ok\":true}"}]}'
-   ```
-2. Ubah `OPENAI_MODEL` di `.env`, lalu jalankan `bun run stop && bun run start`. Store dan memori tidak berubah.
-3. Cek `data/llm-proxy.log`: panggilan baru harus berstatus `200`, dan dokumen baru harus sampai ke status `done`.
-
-#### Model edit prediction Zed, port, dan key
-
-- **Model Zed:** ganti di pengaturan Zed. Adapter meneruskan `model` dari request apa adanya, jadi tidak perlu restart. `ZED_ADAPTER_REASONING_EFFORT` butuh `bun run stop && bun run start`.
-- **`NINEROUTER_PORT`, `OPENAI_API_KEY`, `OPENAI_BASE_URL`:** cukup `./scripts/stop.sh --all && bun run start`.
-
-### Menghapus Dokumen Satu Container Tag
-
-Untuk membuang dokumen uji (misalnya dari menjalankan hook manual dengan `cwd` sementara) tanpa mereset seluruh memori, hapus per dokumen lewat `DELETE /v3/documents/:id`:
+### Menghapus dokumen satu container tag
 
 ```bash
 bun --env-file=.env -e '
-import { SupermemoryClient } from "./src/supermemory-client.ts";
-import { resolveProject } from "./src/project-resolver.ts";
-const c = new SupermemoryClient();
-const tag = resolveProject("/tmp/sm-compact-test").containerTag; // atau tulis tag-nya langsung, mis. "proj_<nama>_<hash>_selftest"
-for (const d of await c.listDocuments({ containerTags: [tag], limit: 100 }))
-  console.log(d.id, (await c.request("DELETE", `/v3/documents/${d.id}`)).error ?? "deleted");'
+import { SupermemoryClient } from "@supermemory-local/client/client";
+import { loadSupermemoryConfig } from "@supermemory-local/client/config";
+import { ProjectResolver } from "@supermemory-local/client/project-resolver";
+const client = new SupermemoryClient(loadSupermemoryConfig());
+const tag = new ProjectResolver().resolve("/tmp/sm-compact-test").containerTag;
+for (const d of await client.listDocuments({ containerTags: [tag], limit: 100 }))
+  console.log(d.id, (await client.request("DELETE", `/v3/documents/${d.id}`)).error ?? "deleted");'
 ```
 
-> Dokumen yang masih diproses (ekstraksi memori lewat 9router, bisa beberapa menit) ditolak dengan `HTTP 409: Document is still processing`. Tunggu sampai selesai, lalu jalankan ulang.
+Dokumen yang masih diproses ditolak dengan `HTTP 409: Document is still processing`; tunggu ekstraksi selesai lalu ulangi.
 
-### Log & Debugging
+### Pengembangan
 
-- Log server supermemory: `./data/supermemory.log`
-- Log proxy LLM (status & durasi tiap request ke 9router): `./data/llm-proxy.log`
-- Log adapter Zed (model, status & durasi tiap prediksi): `./data/zed-adapter.log`
-- Log gateway MCP (supergateway): `./data/supergateway.log`
-- Log aktivitas hook: `~/.supermemory-hook.log`
-- Log gateway 9router: `~/.9router/logs/server.log`
+```bash
+bun test               # unit test + test berbasis DI di tiap app/package
+bun run typecheck
+bun run format
+```
+
+### Log
+
+- Container: `bun run logs` atau `docker compose logs <layanan>` (`supermemory`, `9router`, `llm-proxy`, `zed-adapter`)
+- Gateway MCP: `data/supergateway.log`
+- Hooks: `~/.supermemory-hook.log`
