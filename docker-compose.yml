@@ -2,7 +2,7 @@ name: supermemory
 
 services:
   9router:
-    build: { context: ., dockerfile: apps/9router/Dockerfile, args: { NINEROUTER_VERSION: '${NINEROUTER_VERSION:-0.5.116}' } }
+    build: { context: ., dockerfile: apps/9router/Dockerfile, args: { NINEROUTER_VERSION: '${NINEROUTER_VERSION:-0.5.119}' } }
     restart: unless-stopped
     environment:
       DATA_DIR: /app/data
