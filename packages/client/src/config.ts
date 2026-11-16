@@ -15,7 +15,7 @@ export const DEFAULT_KEY_FILE = path.resolve(import.meta.dir, '../../../data/sup
 export function loadSupermemoryConfig(env: Env = process.env, keyFile = DEFAULT_KEY_FILE): SupermemoryConfig {
 	return {
 		baseUrl: env.SUPERMEMORY_API_URL || 'http://127.0.0.1:6767',
-		apiKey: env.SUPERMEMORY_API_KEY || readKeyFile(keyFile),
+		apiKey: env.SUPERMEMORY_API_KEY ?? readKeyFile(keyFile),
 	};
 }
 
