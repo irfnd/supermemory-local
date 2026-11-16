@@ -23,7 +23,8 @@
 		"test": "bun test",
 		"typecheck": "bun run --filter '@supermemory-local/*' typecheck",
 		"format": "bun --bun prettier --write .",
-		"format:check": "bun --bun prettier --check ."
+		"format:check": "bun --bun prettier --check .",
+		"migrate": "bun --env-file=.env apps/hooks/src/migrate/main.ts"
 	},
 	"keywords": [
 		"supermemory",

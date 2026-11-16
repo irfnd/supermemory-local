@@ -46,24 +46,28 @@ export class SupermemoryClient {
 		}
 	}
 
-	addDocument({ content, containerTags = [], metadata = {} }: NewDocument) {
+	addDocument({ content, containerTags = [], metadata = {}, customId }: NewDocument) {
 		return this.request<{ id: string; status: string }>('POST', '/v3/documents', {
 			content,
 			containerTags,
-			metadata: { ...metadata, timestamp: new Date().toISOString() },
+			customId,
+			metadata: { timestamp: new Date().toISOString(), ...metadata },
 		});
 	}
 
 	async listDocuments({
 		containerTags = [],
 		limit = 50,
+		page = 1,
 	}: {
 		containerTags?: string[];
 		limit?: number;
+		page?: number;
 	}): Promise<DocumentSummary[]> {
 		const res = await this.request<{ memories?: DocumentSummary[] }>('POST', '/v3/documents/list', {
 			containerTags,
 			limit,
+			page,
 			sort: 'createdAt',
 			order: 'desc',
 		});

@@ -100,7 +100,9 @@ export class MemoryRecall {
 					const text = stripContext(doc?.content || '');
 					if (!doc || !text || seen.has(text)) continue;
 					seen.add(text);
-					lines.push(`- [${new Date(doc.createdAt).toLocaleString()}] ${indentContinuation(truncate(text, chars))}`);
+					lines.push(
+						`- [${new Date(String(doc.metadata?.timestamp ?? doc.createdAt)).toLocaleString()}] ${indentContinuation(truncate(text, chars))}`,
+					);
 				}
 				return lines.length ? [`## ${title} (newest first)`, ...lines, ''] : [];
 			}),

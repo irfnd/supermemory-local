@@ -6,6 +6,9 @@ export interface DocumentSummary {
 	id: string;
 	createdAt: string;
 	metadata?: Metadata;
+	containerTags?: string[];
+	status?: string;
+	customId?: string | null;
 }
 
 export interface Document extends DocumentSummary {
@@ -36,4 +39,5 @@ export interface NewDocument {
 	content: string;
 	containerTags?: string[];
 	metadata?: Record<string, unknown>;
+	customId?: string;
 }
