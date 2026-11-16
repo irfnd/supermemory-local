@@ -12,6 +12,8 @@ export class LlmProxy implements Handler {
 	async handle(req: Request): Promise<Response> {
 		const started = Date.now();
 		const url = new URL(req.url);
+		// answered locally: the container healthcheck carries no key, and a forwarded /models gets 401 from 9router with REQUIRE_API_KEY
+		if (url.pathname === '/health') return Response.json({ status: 'ok' });
 		const body =
 			req.method === 'GET' || req.method === 'HEAD'
 				? undefined

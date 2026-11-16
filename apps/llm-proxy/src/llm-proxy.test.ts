@@ -62,3 +62,10 @@ test('proxy answers 502 when the upstream is unreachable', async () => {
 	const res = await proxyFor('http://127.0.0.1:1').handle(post('/chat/completions', { model: 'm' }));
 	expect(res.status).toBe(502);
 });
+
+test('/health is answered locally, without touching the upstream', async () => {
+	const before = received.length;
+	const res = await proxyFor('http://127.0.0.1:1').handle(new Request('http://proxy/health'));
+	expect(res.status).toBe(200);
+	expect(received.length).toBe(before);
+});

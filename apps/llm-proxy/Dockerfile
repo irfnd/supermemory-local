@@ -5,6 +5,6 @@ RUN bun install --production --frozen-lockfile
 ENV BIND_HOST=0.0.0.0 LLM_PROXY_PORT=20129
 USER bun
 EXPOSE 20129
-HEALTHCHECK --interval=10s --timeout=5s --retries=5 CMD bun -e "await fetch('http://127.0.0.1:20129/models')"
+HEALTHCHECK --interval=10s --timeout=5s --retries=5 CMD bun -e "if (!(await fetch('http://127.0.0.1:20129/health')).ok) process.exit(1)"
 WORKDIR /app/apps/llm-proxy
 CMD ["bun", "src/main.ts"]
