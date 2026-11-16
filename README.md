@@ -96,7 +96,12 @@ bun run stop             # docker compose down + stop supergateway (volume dan d
 Store buatan binary macOS terenkripsi dengan kunci turunan ID hardware Mac, jadi **container Linux tidak bisa membukanya** (error `Could not unlock local storage`) dan salinan folder tidak cukup. Memori lama di `data/stores/` tidak dihapus dan tidak dipakai. Pilihannya:
 
 - Biarkan dan mulai dari store kosong di container.
-- Ekspor lewat API dari server lama (`POST /v3/documents/list`, `GET /v3/documents/:id`) lalu impor ke server baru dengan `POST /v3/documents`. Server mengekstrak ulang setiap dokumen lewat LLM, jadi biayanya sebanding dengan jumlah dokumen (batas lisensi Lite: 10.000).
+- Migrasi lewat API dengan `bun run migrate`. Perintah ini selalu memuat `.env` repo (`--env-file=.env`): tujuan impor diambil dari `SUPERMEMORY_API_URL` dan `SUPERMEMORY_API_KEY` di sana (sejak server 0.0.9 key wajib terisi, juga lewat SSH tunnel; kosong hanya berfungsi di 0.0.8 ke bawah, lihat bagian Autentikasi). Server macOS lama tidak bisa dipindah port (selalu 6767), jadi saat ekspor tunjuk lewat variabel di baris perintah, yang menimpa `.env`.
+  1. Jalankan biner lama pada salinan store (`~/.supermemory/bin/supermemory-server` dengan `SUPERMEMORY_DATA_DIR` ke salinan itu), lalu `SUPERMEMORY_API_URL=http://<ip-lan>:6767 SUPERMEMORY_API_KEY=$(cat <salinan>/api-key) bun run migrate export`. Bila 6767 di `localhost` sudah dipakai tunnel, pakai IP LAN Mac. Hasilnya `data/migration/export.json`: semua `session_summary` dan 20 catatan perubahan terbaru per project (`--obs-per-project`, `--tag`).
+  2. Arahkan `.env` ke server tujuan, lalu `bun run migrate import` (urut dari yang terlama, `customId` `migrated-<id>` mencegah duplikat, tanggal asli ada di `metadata.timestamp`). Skrip hanya mengirim saat dokumen yang sedang diproses di server kurang dari `--max-inflight` (50), dan berhenti bila server tidak maju 10 menit atau 5 dokumen gagal berturut-turut.
+  3. Lanjutkan setelah terputus (atau setelah server tujuan di-upgrade) dengan `bun run migrate import --reconcile` (membandingkan isi server dengan berkas export). `--resend-status failed` mengirim ulang dokumen yang gagal diproses, `--dry-run` hanya menghitung.
+  4. Server tidak melanjutkan dokumen yang antreannya hilang saat crash dan tidak bisa menghapusnya (409), jadi jangan kirim sekaligus ke server dengan batas memori ingest kecil (`SUPERMEMORY_EMBEDDING_RAM_LIMIT`). Server memproses sekitar 25 dokumen per menit, sehingga 2.229 dokumen butuh 1–2 jam. Bila laju turun jauh (beberapa dokumen per menit), hentikan impor dan cek log `supermemory-server` dan `9router`; mengirim lebih banyak hanya menambah antrean.
+  5. Urutan yang aman untuk server tujuan yang masih 0.0.8: hentikan impor, upgrade server ke 0.0.9 lewat prosedur resmi (bagian Pembaruan dan backup), isi `SUPERMEMORY_API_KEY` di `.env`, lalu `bun run migrate import --reconcile`. Dokumen yang sudah `done` tidak dikirim ulang.
 
 ### Tes memori
 
@@ -110,8 +115,8 @@ Memakai tag `<project>_selftest` supaya catatan uji tidak bercampur dengan memor
 
 ## 🔑 Autentikasi
 
-- Server memori hanya menerapkan key-nya otomatis untuk request dari loopback. Request dari container lain atau dari Traefik tanpa `Authorization: Bearer <key>` mendapat 401.
-- Hook membaca key dari `SUPERMEMORY_API_KEY`, atau dari `data/supermemory/current/api-key` bila kosong (cocok untuk mode lokal dengan bind mount). Key dibuat server saat boot pertama dan tidak bisa ditentukan sendiri.
+- Sejak supermemory-server 0.0.9 **setiap** request, termasuk dari localhost dan lewat SSH tunnel, harus membawa `Authorization: Bearer <key>`; tanpa itu 401. Satu-satunya pengecualian `GET /v3/health`, dipakai healthcheck. Server 0.0.8 ke bawah masih menerapkan key-nya sendiri untuk request loopback.
+- Hook membaca key dari `SUPERMEMORY_API_KEY`, atau dari `data/supermemory/current/api-key` bila variabelnya **tidak ada** (cocok untuk mode lokal dengan bind mount). Untuk server jauh atau SSH tunnel isi key-nya di sini. Diisi **kosong** (`SUPERMEMORY_API_KEY=`) berarti tanpa header, hanya berfungsi di server 0.0.8 ke bawah. Key dibuat server saat boot pertama dan tidak bisa ditentukan sendiri.
 - Hook tidak pernah memblokir agent: key salah atau server tak terjangkau hanya membuat hook diam (exit 0).
 
 ---
@@ -148,18 +153,33 @@ Dalam satu project, ulangi untuk tiap baris tabel di atas: **Create Service** �
 
 1. **Provider**: GitHub atau Git, pilih repo dan branch. **Build Path**: `/`.
 2. **Build Type**: `Dockerfile`.
-3. **Dockerfile Path**: sesuai tabel. **Docker Context Path**: `.` (akar repo, karena build butuh `packages/` dan `bun.lock`). Simpan.
+3. Kolom **Docker File** (Dockerfile Path): sesuai tabel. **Docker Context Path**: isi `.` secara eksplisit (akar repo, karena build butuh `packages/` dan `bun.lock`). Jangan dikosongkan: placeholder "default: ." menyesatkan, kolom kosong membuat Dokploy memakai folder tempat Dockerfile berada (`apps/<service>/`) sehingga `bun install` gagal dengan `Workspace dependency "@supermemory-local/shared" not found`. Simpan.
 
 Dokploy menampilkan **App Name** di bawah nama service (bentuk `project-service-hash`). Itu hostname internal service di jaringan Dokploy, dan dipakai di URL antar-service pada langkah 4.
 
 ### 4. Isi Environment dan Volume
 
-Tab **Environment** tiap app: salin isi `apps/<service>/.env.example` lalu isi nilainya. Urutan pengisian (karena saling merujuk):
+Variabel dibagi dua kelompok. Nilai yang harus sama di beberapa app ditulis **sekali** di **variabel project**, sisanya khusus app.
 
-1. `9router`: `INITIAL_PASSWORD` (`openssl rand -hex 16`).
-2. `llm-proxy`: `OPENAI_BASE_URL=http://<App Name 9router>:20128/v1`.
-3. `supermemory-server`: `OPENAI_BASE_URL=http://<App Name llm-proxy>:20129`, `OPENAI_API_KEY` (string apa saja selama 9router belum mewajibkan key), model ekstraksi dan embedding.
-4. `zed-adapter`: `OPENAI_BASE_URL=http://<App Name 9router>:20128/v1`, `OPENAI_API_KEY`, `ZED_ADAPTER_TOKEN` (`openssl rand -hex 24`).
+**Variabel project** (halaman project → tab **Environment**, isi `dokploy.env.example`). App merujuknya dengan `${{project.NAMA}}`:
+
+| Variabel                           | Dipakai oleh                        | Isi                                                                                        |
+| ---------------------------------- | ----------------------------------- | ------------------------------------------------------------------------------------------ |
+| `NINEROUTER_URL`                   | `llm-proxy`, `zed-adapter`          | `http://<App Name 9router>:20128/v1`                                                       |
+| `LLM_PROXY_URL`                    | `supermemory-server`                | `http://<App Name llm-proxy>:20129`                                                        |
+| `OPENAI_API_KEY`                   | `supermemory-server`, `zed-adapter` | string apa saja selama 9router belum mewajibkan key; sesudahnya key dari dashboard 9router |
+| `SUPERMEMORY_EMBEDDING_DIMENSIONS` | `supermemory-server`, `llm-proxy`   | `768`; harus sama di keduanya, ganti bersama model embedding                               |
+
+**Khusus app** (tab **Environment** tiap app, isi `apps/<service>/.env.example`; baris `${{project.…}}` di sana disalin apa adanya):
+
+| App                  | Variabel khusus                                                                 |
+| -------------------- | ------------------------------------------------------------------------------- |
+| `9router`            | `INITIAL_PASSWORD` (`openssl rand -hex 16`), `REQUIRE_API_KEY`                  |
+| `llm-proxy`          | tidak ada (`OPENAI_BASE_URL` dan dimensi dari variabel project)                 |
+| `supermemory-server` | `OPENAI_MODEL`, `SUPERMEMORY_EMBEDDING_PROVIDER`, `SUPERMEMORY_EMBEDDING_MODEL` |
+| `zed-adapter`        | `ZED_ADAPTER_TOKEN` (`openssl rand -hex 24`), `ZED_ADAPTER_REASONING_EFFORT`    |
+
+`OPENAI_BASE_URL` sengaja tidak dibagi: nilainya berbeda per app (`supermemory-server` ke `llm-proxy`, yang lain ke 9router). Variabel yang hanya dipakai di Mac (`SUPERMEMORY_API_URL`, `SUPERMEMORY_API_KEY`, `TRANSLATE_MODEL`, `CONTEXT7_API_KEY`) tidak dimasukkan ke Dokploy. Urutan pengisian: variabel project dulu (kecuali URL, isi setelah App Name tiap app ada), lalu `9router`, `llm-proxy`, `supermemory-server`, `zed-adapter`.
 
 Tab **Advanced** → **Volumes** → **Volume Mount** untuk `9router` dan `supermemory-server` sesuai tabel (data hilang tiap deploy tanpa volume). Biarkan replica 1.
 
@@ -181,7 +201,7 @@ Untuk mengunci `/v1` dengan key: buat API key di dashboard, isi `OPENAI_API_KEY`
 
 ### 8. Ambil API key server memori
 
-Buka tab **Terminal** app `supermemory-server` lalu jalankan `cat /data/current/api-key`. Key juga tercetak di log boot pertama, jadi siapa pun yang bisa membuka log Dokploy bisa membacanya.
+Buka tab **Terminal** app `supermemory-server` lalu jalankan `cat /data/current/api-key`. Image resmi tidak mencetak key di log (`SUPERMEMORY_HIDE_API_KEY_IN_LOGS=1`).
 
 ### 9. Arahkan Mac ke VPS
 
@@ -210,6 +230,7 @@ Zed: `api_url` `https://zed.example.com/v1/completions` dan `ZED_ADAPTER_TOKEN` 
 - Perubahan kode: push ke branch, lalu **Deploy** ulang app yang berubah. Untuk deploy otomatis, salin **Webhook URL** dari tab **Deployments** tiap app ke repo (Settings → Webhooks, event Push), dan isi **Watch Paths** (tab General) supaya push hanya men-deploy app yang terkena: `apps/llm-proxy/**`, `packages/shared/**`, `bun.lock` untuk `llm-proxy` (sama untuk `zed-adapter`); `apps/supermemory-server/**` untuk server memori; `apps/9router/**` untuk 9router.
 - Versi 9router: `ARG NINEROUTER_VERSION` di `apps/9router/Dockerfile`. Versi supermemory-server: `ARG SUPERMEMORY_VERSION` di `apps/supermemory-server/Dockerfile`.
 - Backup: volume `supermemory-data` (memori) dan `ninerouter-data` (login provider).
+- **Upgrade supermemory-server** (prosedur resmi, <https://supermemory.ai/docs/self-hosting/docker>): (1) tunggu impor/ingest selesai, karena restart mematikan antrean dokumen yang sedang diproses; (2) hentikan app lalu salin seluruh `/data` (di VPS: `docker run --rm -v <volume>:/data -v "$PWD":/backup alpine tar czf /backup/supermemory-data.tgz -C /data .`); (3) naikkan `ARG SUPERMEMORY_VERSION`, push, **Deploy**; (4) cek `GET /v3/health` lalu `bun run test-memory` dengan `SUPERMEMORY_API_KEY` terisi. Server baru memverifikasi backup lengkap sebelum memigrasi store, dan cleanup-nya bisa menghapus dokumen duplikat lama beserta tautan sumbernya. Rollback hanya dengan memulihkan backup dan memakai versi lama; jangan arahkan image lama ke store yang sudah dimigrasi. Jangan `docker compose down -v` atau hapus volume.
 
 ### Alternatif: satu stack Compose
 
