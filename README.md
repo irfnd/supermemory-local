@@ -172,12 +172,12 @@ Variabel dibagi dua kelompok. Nilai yang harus sama di beberapa app ditulis **se
 
 **Khusus app** (tab **Environment** tiap app, isi `apps/<service>/.env.example`; baris `${{project.…}}` di sana disalin apa adanya):
 
-| App                  | Variabel khusus                                                                 |
-| -------------------- | ------------------------------------------------------------------------------- |
-| `9router`            | `INITIAL_PASSWORD` (`openssl rand -hex 16`), `REQUIRE_API_KEY`                  |
-| `llm-proxy`          | tidak ada (`OPENAI_BASE_URL` dan dimensi dari variabel project)                 |
-| `supermemory-server` | `OPENAI_MODEL`, `SUPERMEMORY_EMBEDDING_PROVIDER`, `SUPERMEMORY_EMBEDDING_MODEL` |
-| `zed-adapter`        | `ZED_ADAPTER_TOKEN` (`openssl rand -hex 24`), `ZED_ADAPTER_REASONING_EFFORT`    |
+| App                  | Variabel khusus                                                                                                                                      |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `9router`            | `INITIAL_PASSWORD` (`openssl rand -hex 16`), `REQUIRE_API_KEY`                                                                                       |
+| `llm-proxy`          | tidak ada (`OPENAI_BASE_URL` dan dimensi dari variabel project)                                                                                      |
+| `supermemory-server` | `OPENAI_MODEL`, `SUPERMEMORY_EMBEDDING_PROVIDER`, `SUPERMEMORY_EMBEDDING_MODEL`, `SUPERMEMORY_INGEST_CONCURRENCY`, `SUPERMEMORY_EMBEDDING_RAM_LIMIT` |
+| `zed-adapter`        | `ZED_ADAPTER_TOKEN` (`openssl rand -hex 24`), `ZED_ADAPTER_REASONING_EFFORT`                                                                         |
 
 `OPENAI_BASE_URL` sengaja tidak dibagi: nilainya berbeda per app (`supermemory-server` ke `llm-proxy`, yang lain ke 9router). Variabel yang hanya dipakai di Mac (`SUPERMEMORY_API_URL`, `SUPERMEMORY_API_KEY`, `TRANSLATE_MODEL`, `CONTEXT7_API_KEY`) tidak dimasukkan ke Dokploy. Urutan pengisian: variabel project dulu (kecuali URL, isi setelah App Name tiap app ada), lalu `9router`, `llm-proxy`, `supermemory-server`, `zed-adapter`.
 

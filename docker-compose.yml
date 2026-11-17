@@ -44,7 +44,7 @@ services:
       SUPERMEMORY_EMBEDDING_DIMENSIONS: ${SUPERMEMORY_EMBEDDING_DIMENSIONS:-768}
       OPENAI_BASE_URL: http://llm-proxy:20129
       OPENAI_API_KEY: ${OPENAI_API_KEY:?set OPENAI_API_KEY}
-      OPENAI_MODEL: ${OPENAI_MODEL:-cc/claude-haiku-4-5-20251001}
+      OPENAI_MODEL: ${OPENAI_MODEL:-cc/claude-haiku-5-5(low)}
     volumes: ['${SUPERMEMORY_DATA:-supermemory-data}:/data']
     expose: ['6767']
     depends_on:
