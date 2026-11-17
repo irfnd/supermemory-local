@@ -15,6 +15,7 @@ bun install
 bun run start            # docker compose up --build --wait (+ local overrides) then supergateway (PID .supergateway.pid)
 bun run start:mcp        # supergateway only (server lives on a VPS)
 bun run stop             # supergateway, then docker compose down (volumes and ./data kept); stop:mcp = gateway only
+bun run launchd <install|start|stop|status|uninstall>   # LaunchAgents for `ssh contaboo-tunnel` + supergateway (packages/launchd/launchd.sh)
 bun run status
 bun run logs             # docker compose logs -f
 bun run mcp:check        # supergateway --checkConfig on mcp-config.json (loads .env for the ${VAR}s)

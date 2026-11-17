@@ -225,6 +225,17 @@ bun run test-memory
 
 Zed: `api_url` `https://zed.example.com/v1/completions` dan `ZED_ADAPTER_TOKEN` sebagai API key provider.
 
+**Otomatis sejak login (launchd).** Bila server dijangkau lewat tunnel `ssh contaboo-tunnel` (alias di `~/.ssh/config`), tunnel dan supergateway bisa dijalankan sebagai LaunchAgent: hidup sejak login dan dijalankan ulang bila mati.
+
+```bash
+bun run stop:mcp && pkill -f 'ssh .*contaboo-tunnel'   # hentikan yang dijalankan manual lebih dulu
+bun run launchd install      # tulis ~/Library/LaunchAgents/local.supermemory.{tunnel,gateway}.plist dan jalankan
+bun run launchd status | start | stop
+bun run launchd uninstall    # hapus kedua agent (log di data/ tetap)
+```
+
+`install` menolak berjalan bila tunnel atau gateway manual masih hidup (port-nya terpakai). Setelah terpasang, `stop:mcp` tidak mematikan gateway (PID-nya dipegang launchd): pakai `launchd stop`. LaunchAgent mulai saat login, bukan sebelum login: aktifkan login otomatis bila Mac harus siap tanpa dijaga. Log: `data/tunnel.log` dan `data/supergateway.log`.
+
 ### 10. Pembaruan dan backup
 
 - Perubahan kode: push ke branch, lalu **Deploy** ulang app yang berubah. Untuk deploy otomatis, salin **Webhook URL** dari tab **Deployments** tiap app ke repo (Settings → Webhooks, event Push), dan isi **Watch Paths** (tab General) supaya push hanya men-deploy app yang terkena: `apps/llm-proxy/**`, `packages/shared/**`, `bun.lock` untuk `llm-proxy` (sama untuk `zed-adapter`); `apps/supermemory-server/**` untuk server memori; `apps/9router/**` untuk 9router.
