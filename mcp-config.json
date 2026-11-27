@@ -29,6 +29,10 @@
 		"figcraft": {
 			"command": "python3",
 			"args": ["${HOME}/.agents/skills/figcraft/scripts/mcp-proxy.py"]
+		},
+		"bruno": {
+			"command": "bunx",
+			"args": ["--bun", "@usebruno/mcp@latest"]
 		}
 	}
 }
