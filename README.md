@@ -235,16 +235,16 @@ bun run test-memory
 
 Zed: `api_url` `https://zed.example.com/v1/completions` dan `ZED_ADAPTER_TOKEN` sebagai API key provider.
 
-**Otomatis sejak login (launchd).** Bila server dijangkau lewat tunnel `ssh contaboo-tunnel` (alias di `~/.ssh/config`), tunnel dan supergateway bisa dijalankan sebagai LaunchAgent: hidup sejak login dan dijalankan ulang bila mati.
+**Otomatis sejak login (launchd).** Bila server dijangkau lewat tunnel `ssh contaboo-tunnel` (alias di `~/.ssh/config`), tunnel dan supergateway bisa dijalankan sebagai LaunchAgent: hidup sejak login dan dijalankan ulang bila mati. Agent tunnel hanya dipasang bila `CURL_IMPERSONATE` kosong; begitu variabel itu diisi, `install` menghapus agent tunnel dan menyisakan gateway saja (gateway tetap perlu: MCP server di `mcp-config.json` terikat ke laptop).
 
 ```bash
 bun run stop:mcp && pkill -f 'ssh .*contaboo-tunnel'   # hentikan yang dijalankan manual lebih dulu
 bun run launchd install      # tulis ~/Library/LaunchAgents/local.supermemory.{tunnel,gateway}.plist dan jalankan
 bun run launchd status | start | stop
-bun run launchd uninstall    # hapus kedua agent (log di data/ tetap)
+bun run launchd uninstall    # hapus kedua agent (log di data/ tetap); pakai ini sebelum install ulang setelah mengganti CURL_IMPERSONATE
 ```
 
-`install` menolak berjalan bila tunnel atau gateway manual masih hidup (port-nya terpakai). Setelah terpasang, `stop:mcp` tidak mematikan gateway (PID-nya dipegang launchd): pakai `launchd stop`. LaunchAgent mulai saat login, bukan sebelum login: aktifkan login otomatis bila Mac harus siap tanpa dijaga. Log: `data/tunnel.log` dan `data/supergateway.log`.
+`install` menolak berjalan bila tunnel atau gateway manual masih hidup (port-nya terpakai). Setelah terpasang, `stop:mcp` tidak mematikan gateway (PID-nya dipegang launchd): pakai `launchd stop`. LaunchAgent mulai saat login, bukan sebelum login: aktifkan login otomatis bila Mac harus siap tanpa dijaga. Log: `data/tunnel.log` dan `data/supergateway.log`. Di mode `CURL_IMPERSONATE` tidak ada tunnel, jadi `status` mencetak `egress : curl-impersonate (...)` alih-alih cek `:6767`.
 
 ### 10. Pembaruan dan backup
 

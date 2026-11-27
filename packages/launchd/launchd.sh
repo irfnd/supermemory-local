@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# LaunchAgents that keep `ssh contaboo-tunnel` and supergateway running from login on, and restart them when they die.
+# LaunchAgents that keep supergateway (and `ssh contaboo-tunnel`, unless CURL_IMPERSONATE is set in .env) running from
+# login on, and restart them when they die.
 # Usage: bun run launchd <install|start|stop|status|uninstall|plists>
 set -euo pipefail
 
@@ -8,7 +9,10 @@ AGENTS_DIR="${AGENTS_DIR:-$HOME/Library/LaunchAgents}"
 DOMAIN="gui/$(id -u)"
 TUNNEL=local.supermemory.tunnel
 GATEWAY=local.supermemory.gateway
-LABELS=("$TUNNEL" "$GATEWAY")
+# hooks reach the VPS through libcurl-impersonate when this is filled, so the tunnel stays off and port 6767 unused
+IMPERSONATE="$(grep -E '^CURL_IMPERSONATE=' "$ROOT/.env" 2>/dev/null | head -1 | cut -d= -f2- | tr -d "\"'[:space:]" || true)"
+LABELS=("$GATEWAY")
+[ -n "$IMPERSONATE" ] || LABELS=("$TUNNEL" "$GATEWAY")
 GATEWAY_PORT="$(grep -E '^MCP_GATEWAY_PORT=' "$ROOT/.env" 2>/dev/null | cut -d= -f2 || true)"
 GATEWAY_PORT="${GATEWAY_PORT:-20131}"
 
@@ -42,10 +46,16 @@ plist() {
 
 write_plists() {
 	mkdir -p "$AGENTS_DIR" "$ROOT/data"
-	# BatchMode: no passphrase prompt (the key comes from the keychain agent); the short keepalive notices a dead
-	# network (new IP, sleep) in ~45s instead of the ~5 min in ~/.ssh/config, then launchd reconnects
-	plist "$TUNNEL" "$ROOT/data/tunnel.log" /usr/bin/ssh -N -o BatchMode=yes -o ExitOnForwardFailure=yes \
-		-o ServerAliveInterval=15 -o ServerAliveCountMax=3 contaboo-tunnel
+	if [ -n "$IMPERSONATE" ]; then
+		# domain mode: drop a tunnel plist left over from the previous install
+		if loaded "$TUNNEL"; then launchctl bootout "$DOMAIN/$TUNNEL"; fi
+		rm -f "$AGENTS_DIR/$TUNNEL.plist"
+	else
+		# BatchMode: no passphrase prompt (the key comes from the keychain agent); the short keepalive notices a dead
+		# network (new IP, sleep) in ~45s instead of the ~5 min in ~/.ssh/config, then launchd reconnects
+		plist "$TUNNEL" "$ROOT/data/tunnel.log" /usr/bin/ssh -N -o BatchMode=yes -o ExitOnForwardFailure=yes \
+			-o ServerAliveInterval=15 -o ServerAliveCountMax=3 contaboo-tunnel
+	fi
 	# .env fills the ${VAR} placeholders of mcp-config.json; exec so launchd supervises supergateway itself
 	plist "$GATEWAY" "$ROOT/data/supergateway.log" /bin/bash -c \
 		"set -e; cd '$ROOT'; set -a; . ./.env; set +a; exec supergateway --config mcp-config.json --port \"\${MCP_GATEWAY_PORT:-20131}\""
@@ -54,7 +64,7 @@ write_plists() {
 # A hand-started tunnel or gateway holds the ports, so the agent would crash-loop (ExitOnForwardFailure)
 check_free() {
 	local busy=0
-	if ! loaded "$TUNNEL" && pgrep -f 'ssh .*contaboo-tunnel' >/dev/null; then
+	if [ -z "$IMPERSONATE" ] && ! loaded "$TUNNEL" && pgrep -f 'ssh .*contaboo-tunnel' >/dev/null; then
 		echo "❌ an 'ssh contaboo-tunnel' is already running (PID $(pgrep -f 'ssh .*contaboo-tunnel' | tr '\n' ' ')): stop it first"
 		busy=1
 	fi
@@ -90,9 +100,13 @@ status() {
 		fi
 	done
 	gateway_up && echo "gateway   :$GATEWAY_PORT ✓" || echo "gateway   :$GATEWAY_PORT ✗"
-	local code
-	code="$(curl -s --connect-timeout 2 -o /dev/null -w '%{http_code}' http://127.0.0.1:6767/v3/health || true)"
-	[ "$code" = 200 ] && echo "supermemory :6767 ✓ (through the tunnel)" || echo "supermemory :6767 ✗ ($code)"
+	if [ -n "$IMPERSONATE" ]; then
+		echo "egress    : curl-impersonate ($IMPERSONATE), tunnel off"
+	else
+		local code
+		code="$(curl -s --connect-timeout 2 -o /dev/null -w '%{http_code}' http://127.0.0.1:6767/v3/health || true)"
+		[ "$code" = 200 ] && echo "supermemory :6767 ✓ (through the tunnel)" || echo "supermemory :6767 ✗ ($code)"
+	fi
 }
 
 install() {
@@ -105,19 +119,20 @@ install() {
 	[ ${#missing[@]} -eq 0 ] || { echo "❌ not set in $ROOT/.env (needed by mcp-config.json): ${missing[*]}"; exit 1; }
 	command -v supergateway >/dev/null || PATH="/opt/homebrew/bin:$PATH" command -v supergateway >/dev/null \
 		|| { echo "❌ supergateway not found (brew install supercorp-ai/tap/supergateway)"; exit 1; }
-	ssh -G contaboo-tunnel >/dev/null 2>&1 || { echo "❌ no 'Host contaboo-tunnel' in ~/.ssh/config"; exit 1; }
+	[ -n "$IMPERSONATE" ] || { ssh -G contaboo-tunnel >/dev/null 2>&1 || { echo "❌ no 'Host contaboo-tunnel' in ~/.ssh/config"; exit 1; }; }
 	check_free || exit 1
 	local l
 	for l in "${LABELS[@]}"; do loaded "$l" && launchctl bootout "$DOMAIN/$l"; done
 	write_plists
-	echo "✓ wrote $AGENTS_DIR/{$TUNNEL,$GATEWAY}.plist"
+	echo "✓ wrote $AGENTS_DIR/{$(echo "${LABELS[*]}" | tr ' ' ',')}.plist"
+	if [ -n "$IMPERSONATE" ]; then echo "ℹ CURL_IMPERSONATE=$IMPERSONATE: tunnel agent not installed"; fi
 	start
 	echo "ℹ LaunchAgents start at login, not before it: enable automatic login if the Mac must come up unattended."
 }
 
 uninstall() {
 	local l
-	for l in "${LABELS[@]}"; do
+	for l in "$TUNNEL" "$GATEWAY"; do
 		loaded "$l" && launchctl bootout "$DOMAIN/$l"
 		rm -f "$AGENTS_DIR/$l.plist"
 	done
