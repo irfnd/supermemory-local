@@ -16,6 +16,7 @@
 		"stop:mcp": "bash scripts/stop.sh --mcp-only",
 		"status": "bash scripts/status.sh",
 		"launchd": "bash packages/launchd/launchd.sh",
+		"egress": "bun --env-file=.env apps/egress-proxy/src/main.ts",
 		"logs": "docker compose -f docker-compose.yml -f docker-compose.local.yml logs -f",
 		"mcp:check": "bash -c 'set -a; source .env; set +a; supergateway --config mcp-config.json --checkConfig'",
 		"install-hooks": "bun apps/hooks/src/installer/main.ts install",

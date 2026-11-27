@@ -224,6 +224,8 @@ SUPERMEMORY_API_URL=http://localhost:6767
 OPENAI_BASE_URL=http://127.0.0.1:20128/v1
 ```
 
+**Zed dan OpenCode.** Keduanya melakukan handshake TLS sendiri, jadi hook yang lewat `curl-impersonate` tidak menolong mereka. Di mode domain, `launchd install` memasang agent `local.supermemory.egress` yang membuka `127.0.0.1:20128` dan `:20130` (port yang sama dengan tunnel) lalu meneruskannya ke `OPENAI_BASE_URL` dan `EGRESS_ZED_URL` lewat `curl-impersonate`, termasuk stream SSE. Jadi OpenCode cukup memakai `"baseURL": "http://localhost:20128/v1"` dan Zed tidak perlu diubah.
+
 Hooks membaca `.env` di setiap panggilan, jadi tidak perlu dipasang ulang. Lalu jalankan hanya gateway MCP:
 
 ```bash
@@ -235,7 +237,7 @@ bun run test-memory
 
 Zed: `api_url` `https://zed.example.com/v1/completions` dan `ZED_ADAPTER_TOKEN` sebagai API key provider.
 
-**Otomatis sejak login (launchd).** Bila server dijangkau lewat tunnel `ssh contaboo-tunnel` (alias di `~/.ssh/config`), tunnel dan supergateway bisa dijalankan sebagai LaunchAgent: hidup sejak login dan dijalankan ulang bila mati. Agent tunnel hanya dipasang bila `CURL_IMPERSONATE` kosong; begitu variabel itu diisi, `install` menghapus agent tunnel dan menyisakan gateway saja (gateway tetap perlu: MCP server di `mcp-config.json` terikat ke laptop).
+**Otomatis sejak login (launchd).** Bila server dijangkau lewat tunnel `ssh contaboo-tunnel` (alias di `~/.ssh/config`), tunnel dan supergateway bisa dijalankan sebagai LaunchAgent: hidup sejak login dan dijalankan ulang bila mati. Agent tunnel hanya dipasang bila `CURL_IMPERSONATE` kosong; begitu variabel itu diisi, `install` menghapus agent tunnel dan memasang agent `local.supermemory.egress` (lihat bagian Zed dan OpenCode di atas), dengan gateway tetap ada (MCP server di `mcp-config.json` terikat ke laptop).
 
 ```bash
 bun run stop:mcp && pkill -f 'ssh .*contaboo-tunnel'   # hentikan yang dijalankan manual lebih dulu

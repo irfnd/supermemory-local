@@ -16,6 +16,13 @@
       "name": "@supermemory-local/9router",
       "version": "1.0.0",
     },
+    "apps/egress-proxy": {
+      "name": "@supermemory-local/egress-proxy",
+      "version": "1.0.0",
+      "dependencies": {
+        "@supermemory-local/shared": "workspace:*",
+      },
+    },
     "apps/hooks": {
       "name": "@supermemory-local/hooks",
       "version": "1.0.0",
@@ -84,6 +91,8 @@
     "@supermemory-local/9router": ["@supermemory-local/9router@workspace:apps/9router"],
 
     "@supermemory-local/client": ["@supermemory-local/client@workspace:packages/client"],
+
+    "@supermemory-local/egress-proxy": ["@supermemory-local/egress-proxy@workspace:apps/egress-proxy"],
 
     "@supermemory-local/hooks": ["@supermemory-local/hooks@workspace:apps/hooks"],
 

@@ -9,10 +9,11 @@ AGENTS_DIR="${AGENTS_DIR:-$HOME/Library/LaunchAgents}"
 DOMAIN="gui/$(id -u)"
 TUNNEL=local.supermemory.tunnel
 GATEWAY=local.supermemory.gateway
+EGRESS=local.supermemory.egress
 # hooks reach the VPS through libcurl-impersonate when this is filled, so the tunnel stays off and port 6767 unused
 IMPERSONATE="$(grep -E '^CURL_IMPERSONATE=' "$ROOT/.env" 2>/dev/null | head -1 | cut -d= -f2- | tr -d "\"'[:space:]" || true)"
 LABELS=("$GATEWAY")
-[ -n "$IMPERSONATE" ] || LABELS=("$TUNNEL" "$GATEWAY")
+if [ -n "$IMPERSONATE" ]; then LABELS=("$EGRESS" "$GATEWAY"); else LABELS=("$TUNNEL" "$GATEWAY"); fi
 GATEWAY_PORT="$(grep -E '^MCP_GATEWAY_PORT=' "$ROOT/.env" 2>/dev/null | cut -d= -f2 || true)"
 GATEWAY_PORT="${GATEWAY_PORT:-20131}"
 
@@ -50,7 +51,12 @@ write_plists() {
 		# domain mode: drop a tunnel plist left over from the previous install
 		if loaded "$TUNNEL"; then launchctl bootout "$DOMAIN/$TUNNEL"; fi
 		rm -f "$AGENTS_DIR/$TUNNEL.plist"
+		# plain HTTP on the tunnel's ports, forwarded to the VPS through libcurl-impersonate
+		plist "$EGRESS" "$ROOT/data/egress.log" /bin/bash -c \
+			"set -e; cd '$ROOT'; set -a; . ./.env; set +a; exec bun '$ROOT/apps/egress-proxy/src/main.ts'"
 	else
+		if loaded "$EGRESS"; then launchctl bootout "$DOMAIN/$EGRESS"; fi
+		rm -f "$AGENTS_DIR/$EGRESS.plist"
 		# BatchMode: no passphrase prompt (the key comes from the keychain agent); the short keepalive notices a dead
 		# network (new IP, sleep) in ~45s instead of the ~5 min in ~/.ssh/config, then launchd reconnects
 		plist "$TUNNEL" "$ROOT/data/tunnel.log" /usr/bin/ssh -N -o BatchMode=yes -o ExitOnForwardFailure=yes \
@@ -67,6 +73,15 @@ check_free() {
 	if [ -z "$IMPERSONATE" ] && ! loaded "$TUNNEL" && pgrep -f 'ssh .*contaboo-tunnel' >/dev/null; then
 		echo "❌ an 'ssh contaboo-tunnel' is already running (PID $(pgrep -f 'ssh .*contaboo-tunnel' | tr '\n' ' ')): stop it first"
 		busy=1
+	fi
+	if [ -n "$IMPERSONATE" ] && ! loaded "$EGRESS"; then
+		local p
+		for p in 20128 20130; do
+			if lsof -nP -iTCP:"$p" -sTCP:LISTEN >/dev/null 2>&1; then
+				echo "❌ port $p is in use (a manual tunnel or proxy?): stop it first"
+				busy=1
+			fi
+		done
 	fi
 	if ! loaded "$GATEWAY" && gateway_up; then
 		echo "❌ supergateway already answers on :$GATEWAY_PORT: run 'bun run stop:mcp' first"
@@ -101,7 +116,11 @@ status() {
 	done
 	gateway_up && echo "gateway   :$GATEWAY_PORT ✓" || echo "gateway   :$GATEWAY_PORT ✗"
 	if [ -n "$IMPERSONATE" ]; then
-		echo "egress    : curl-impersonate ($IMPERSONATE), tunnel off"
+		local p code
+		for p in 20128 20130; do
+			code="$(curl -s --connect-timeout 1 -o /dev/null -w '%{http_code}' "http://127.0.0.1:$p/health" || true)"
+			[ "$code" = 200 ] && echo "egress    :$p ✓ ($IMPERSONATE)" || echo "egress    :$p ✗ ($code)"
+		done
 	else
 		local code
 		code="$(curl -s --connect-timeout 2 -o /dev/null -w '%{http_code}' http://127.0.0.1:6767/v3/health || true)"
@@ -132,7 +151,7 @@ install() {
 
 uninstall() {
 	local l
-	for l in "$TUNNEL" "$GATEWAY"; do
+	for l in "$TUNNEL" "$EGRESS" "$GATEWAY"; do
 		loaded "$l" && launchctl bootout "$DOMAIN/$l"
 		rm -f "$AGENTS_DIR/$l.plist"
 	done
