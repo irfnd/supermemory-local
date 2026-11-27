@@ -13,6 +13,7 @@ export interface HooksConfig {
 	logFile: string;
 	syncDir: string;
 	translate?: TranslateConfig;
+	impersonate?: string;
 }
 
 export const HOOKS_CONFIG = token<HooksConfig>('HooksConfig');
@@ -24,5 +25,6 @@ export function loadHooksConfig(env: Env = process.env): HooksConfig {
 		logFile: path.join(env.HOME || '/tmp', '.supermemory-hook.log'),
 		syncDir: path.join(os.tmpdir(), 'supermemory-sync'),
 		translate: model && baseUrl ? { model, baseUrl, apiKey: env.OPENAI_API_KEY ?? '' } : undefined,
+		impersonate: env.CURL_IMPERSONATE?.trim() || undefined,
 	};
 }

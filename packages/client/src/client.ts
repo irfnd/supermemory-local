@@ -8,6 +8,7 @@ import type {
 	SearchHit,
 	SearchResult,
 } from '@supermemory-local/client/types';
+import { curlFetch } from '@supermemory-local/shared/curl';
 
 const REQUEST_TIMEOUT_MS = 5000;
 const HEALTH_TIMEOUT_MS = 3000;
@@ -21,10 +22,7 @@ export class SupermemoryClient {
 
 	async isHealthy(): Promise<boolean> {
 		try {
-			const res = await fetch(`${this.baseUrl}/v3/search/spaces`, {
-				headers: this.headers(),
-				signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS),
-			});
+			const res = await this.send(`${this.baseUrl}/v3/search/spaces`, { timeoutMs: HEALTH_TIMEOUT_MS });
 			return res.status === 200;
 		} catch {
 			return false;
@@ -33,11 +31,10 @@ export class SupermemoryClient {
 
 	async request<T>(method: string, urlPath: string, body?: unknown): Promise<Result<T>> {
 		try {
-			const res = await fetch(`${this.baseUrl}${urlPath}`, {
+			const res = await this.send(`${this.baseUrl}${urlPath}`, {
 				method,
-				headers: this.headers(),
 				body: body ? JSON.stringify(body) : undefined,
-				signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+				timeoutMs: REQUEST_TIMEOUT_MS,
 			});
 			if (!res.ok) return { success: false, error: `HTTP ${res.status}: ${await res.text()}` };
 			return { success: true, data: (await res.json()) as T };
@@ -117,6 +114,17 @@ export class SupermemoryClient {
 			containerTags,
 		});
 		return res.success ? { results: res.data.results ?? [] } : { results: [], error: res.error };
+	}
+
+	private send(url: string, init: { method?: string; body?: string; timeoutMs: number }): Promise<Response> {
+		const headers = this.headers();
+		if (this.config.impersonate) return curlFetch(url, { ...init, headers }, this.config.impersonate);
+		return fetch(url, {
+			method: init.method,
+			headers,
+			body: init.body,
+			signal: AbortSignal.timeout(init.timeoutMs),
+		});
 	}
 
 	private headers(): Record<string, string> {

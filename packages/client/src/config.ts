@@ -6,6 +6,7 @@ import type { Env } from '@supermemory-local/shared/env';
 export interface SupermemoryConfig {
 	baseUrl: string;
 	apiKey: string;
+	impersonate?: string;
 }
 
 export const SUPERMEMORY_CONFIG = token<SupermemoryConfig>('SupermemoryConfig');
@@ -16,6 +17,7 @@ export function loadSupermemoryConfig(env: Env = process.env, keyFile = DEFAULT_
 	return {
 		baseUrl: env.SUPERMEMORY_API_URL || 'http://127.0.0.1:6767',
 		apiKey: env.SUPERMEMORY_API_KEY ?? readKeyFile(keyFile),
+		impersonate: env.CURL_IMPERSONATE?.trim() || undefined,
 	};
 }
 

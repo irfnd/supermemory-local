@@ -212,6 +212,16 @@ SUPERMEMORY_API_URL=https://memory.example.com
 SUPERMEMORY_API_KEY=<key dari langkah 8>
 OPENAI_BASE_URL=https://router.example.com/v1
 OPENAI_API_KEY=<key 9router bila REQUIRE_API_KEY=true>
+CURL_IMPERSONATE=chrome152_macos
+```
+
+`CURL_IMPERSONATE` membuat hook dan client mengirim request lewat `curl-impersonate` (`brew install curl-impersonate`; profil TLS/HTTP2-nya ikut nama yang diisi, misalnya `chrome152_macos`). Ini hanya untuk Mac: container tetap memakai `fetch` ke jaringan internal Docker, jadi Dockerfile tidak berubah. Butuh biner di path lain? Isi `CURL_IMPERSONATE_BIN`.
+
+**Kembali ke SSH tunnel.** Kosongkan `CURL_IMPERSONATE`, lalu arahkan URL ke port tunnel:
+
+```ini
+SUPERMEMORY_API_URL=http://localhost:6767
+OPENAI_BASE_URL=http://127.0.0.1:20128/v1
 ```
 
 Hooks membaca `.env` di setiap panggilan, jadi tidak perlu dipasang ulang. Lalu jalankan hanya gateway MCP:

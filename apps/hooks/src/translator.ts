@@ -1,4 +1,5 @@
 import { LOGGER, type Logger } from '@supermemory-local/shared/logger';
+import { curlFetch } from '@supermemory-local/shared/curl';
 import { HOOKS_CONFIG, type HooksConfig } from '@/config.ts';
 import { isEnglish } from '@/text.ts';
 
@@ -15,7 +16,8 @@ export class Translator {
 		const { translate } = this.config;
 		if (!translate || !text.trim() || isEnglish(text)) return text;
 		try {
-			const res = await fetch(`${translate.baseUrl}/chat/completions`, {
+			const url = `${translate.baseUrl}/chat/completions`;
+			const init = {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${translate.apiKey}` },
 				body: JSON.stringify({
@@ -26,8 +28,10 @@ export class Translator {
 						{ role: 'user', content: `<text>\n${text}\n</text>` },
 					],
 				}),
-				signal: AbortSignal.timeout(timeoutMs),
-			});
+			};
+			const res = this.config.impersonate
+				? await curlFetch(url, { ...init, timeoutMs }, this.config.impersonate)
+				: await fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
 			if (!res.ok) throw new Error(`HTTP ${res.status}`);
 			const body = (await res.json()) as { choices?: { message?: { content?: string } }[] };
 			return body.choices?.[0]?.message?.content?.trim() || text;
