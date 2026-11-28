@@ -36,4 +36,11 @@ describe.skipIf(!fs.existsSync(bin))('EgressProxy', () => {
 			up.stop(true);
 		}
 	});
+
+	test('surfaces curl stderr instead of a bare header error', async () => {
+		const proxy = new EgressProxy('t', 'http://127.0.0.1:1/v1', 'chrome152_macos', logger);
+		const res = await proxy.handle(new Request('http://p/v1/models'));
+		expect(res.status).toBe(502);
+		expect(((await res.json()) as { error: { message: string } }).error.message).toContain('Failed to connect');
+	});
 });

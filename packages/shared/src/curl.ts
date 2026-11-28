@@ -33,6 +33,8 @@ export async function curlFetch(
 		(timeoutMs / 1000).toFixed(3),
 	];
 	for (const [key, value] of Object.entries(headers)) args.push('-H', `${key}: ${value}`);
+	// c-ares does not use the macOS resolver; some routers time out on its queries (CURL_DNS_SERVERS=1.1.1.1)
+	if (process.env.CURL_DNS_SERVERS) args.push('--dns-servers', process.env.CURL_DNS_SERVERS);
 	if (body !== undefined) args.push('--data-binary', '@-');
 	args.push(url);
 

@@ -22,6 +22,7 @@ export class EgressProxy implements Handler {
 		if (pathname === '/health') return Response.json({ status: 'ok', upstream: this.upstream });
 		const started = Date.now();
 		const headerFile = path.join(os.tmpdir(), `egress-${process.pid}-${Math.random().toString(36).slice(2)}`);
+		let proc: Bun.Subprocess | undefined;
 		try {
 			const body = req.method === 'GET' || req.method === 'HEAD' ? undefined : await req.text();
 			const args = [
@@ -40,27 +41,32 @@ export class EgressProxy implements Handler {
 				String(MAX_SECONDS),
 			];
 			for (const [key, value] of req.headers) if (!DROPPED.has(key)) args.push('-H', `${key}: ${value}`);
+			// c-ares does not use the macOS resolver; some routers time out on its queries (CURL_DNS_SERVERS=1.1.1.1)
+			if (process.env.CURL_DNS_SERVERS) args.push('--dns-servers', process.env.CURL_DNS_SERVERS);
 			if (body) args.push('--data-binary', '@-');
 			args.push(this.target(pathname) + search);
 
-			const proc = Bun.spawn([process.env.CURL_IMPERSONATE_BIN || DEFAULT_BIN, ...args], {
+			const spawned = Bun.spawn([process.env.CURL_IMPERSONATE_BIN || DEFAULT_BIN, ...args], {
 				stdin: body ? Buffer.from(body) : 'ignore',
 				stdout: 'pipe',
 				stderr: 'pipe',
 			});
-			const { status, contentType } = parseHead(await readHead(headerFile, proc));
+			proc = spawned;
+			const { status, contentType } = parseHead(await readHead(headerFile, spawned));
 			this.logger.info(`${this.name} ${req.method} ${pathname} ${status} ${Date.now() - started}ms`);
-			proc.exited.then(async (code) => {
+			spawned.exited.then(async (code) => {
 				fs.rmSync(headerFile, { force: true });
-				const stderr = await new Response(proc.stderr).text();
+				const stderr = await new Response(spawned.stderr).text();
 				if (code !== 0 || stderr.trim()) this.logger.info(`${this.name} ${pathname} curl exit ${code}: ${stderr.trim()}`);
 			});
 			// piped as a stream: 9router answers chat with SSE, buffering it would stall the client until the end
 			if (status === 204 || status === 304) return new Response(null, { status });
-			return new Response(proc.stdout, { status, headers: { 'content-type': contentType } });
+			return new Response(spawned.stdout, { status, headers: { 'content-type': contentType } });
 		} catch (err) {
+			proc?.kill();
+			const stderr = proc?.stderr instanceof ReadableStream ? (await new Response(proc.stderr).text()).trim() : '';
 			fs.rmSync(headerFile, { force: true });
-			const message = (err as Error).message;
+			const message = stderr || (err as Error).message;
 			this.logger.info(`${this.name} ${req.method} ${pathname} ERROR ${message}`);
 			return Response.json({ error: { message: `egress-proxy: ${message}` } }, { status: 502 });
 		}
